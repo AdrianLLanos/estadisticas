@@ -16,6 +16,9 @@ const LEAGUE = {
   pitcherHr9: 1.15,
   pitcherHits9: 8.45,
   starterInnings: 5.20,
+  battingAverage: 0.245,
+  runsAllowedPerGame: 4.45,
+  totalRunsLine: 8.5,
 };
 
 const state = {
@@ -24,6 +27,7 @@ const state = {
   selectedGamePk: null,
   teamStats: new Map(),
   pitcherStats: new Map(),
+  recentContexts: new Map(),
 };
 
 const els = {
@@ -102,11 +106,15 @@ async function compareSelectedGame() {
   try {
     const espnEvent = findEspnEvent(game);
     const espnPitchers = extractEspnPitchers(espnEvent);
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher] = await Promise.all([
+    const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
+    const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
+    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
-      getPitcherStats(game.teams.away.probablePitcher?.id),
-      getPitcherStats(game.teams.home.probablePitcher?.id),
+      getPitcherStats(game.teams.away.probablePitcher?.id, season),
+      getPitcherStats(game.teams.home.probablePitcher?.id, season),
+      getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
+      getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
@@ -117,6 +125,8 @@ async function compareSelectedGame() {
       homeStats,
       awayPitcher,
       homePitcher,
+      awayRecent,
+      homeRecent,
       espnEvent,
     });
 
@@ -132,11 +142,179 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, espnEvent }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
   const homeName = shortName(homeTeam.name);
+
+  {
+  const odds = extractEspnOdds(espnEvent);
+  const espnRecords = extractEspnTeamRecords(espnEvent);
+  awayStats = { ...awayStats, ...espnRecords.away };
+  homeStats = { ...homeStats, ...espnRecords.home };
+  const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
+  const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
+  const awayOffense = calcularOfensivaEquipo(awayStats);
+  const homeOffense = calcularOfensivaEquipo(homeStats);
+  const awayForm = calcularFormaReciente(awayRecent);
+  const homeForm = calcularFormaReciente(homeRecent);
+  const awayBullpen = calcularBullpenAproximado(awayRecent?.bullpen);
+  const homeBullpen = calcularBullpenAproximado(homeRecent?.bullpen);
+  const awayLocalia = calcularVentajaLocalia(awayStats, awayRecent, false);
+  const homeLocalia = calcularVentajaLocalia(homeStats, homeRecent, true);
+  const awayMatchup = calcularMatchup(awayOffense, homePitcherMetrics, homeBullpen, awayForm);
+  const homeMatchup = calcularMatchup(homeOffense, awayPitcherMetrics, awayBullpen, homeForm);
+  const awayRuns = proyectarCarrerasEquipo({
+    teamStats: awayStats,
+    opponentStats: homeStats,
+    offense: awayOffense,
+    opponentPitcher: homePitcherMetrics,
+    opponentBullpen: homeBullpen,
+    recentForm: awayForm,
+    localia: awayLocalia,
+    matchup: awayMatchup,
+    isHome: false,
+  });
+  const homeRuns = proyectarCarrerasEquipo({
+    teamStats: homeStats,
+    opponentStats: awayStats,
+    offense: homeOffense,
+    opponentPitcher: awayPitcherMetrics,
+    opponentBullpen: awayBullpen,
+    recentForm: homeForm,
+    localia: homeLocalia,
+    matchup: homeMatchup,
+    isHome: true,
+  });
+  const totalRuns = calcularTotalCarreras(awayRuns, homeRuns);
+  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm);
+  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm);
+  const totalHits = calcularHitsTotales(awayStats, homeStats, homePitcherMetrics, awayPitcherMetrics, awayForm, homeForm);
+  const probability = calcularProbabilidadGanador({
+    awayRuns,
+    homeRuns,
+    awayScores: { pitcher: awayPitcherMetrics, offense: awayOffense, form: awayForm, bullpen: awayBullpen, localia: awayLocalia, matchup: awayMatchup },
+    homeScores: { pitcher: homePitcherMetrics, offense: homeOffense, form: homeForm, bullpen: homeBullpen, localia: homeLocalia, matchup: homeMatchup },
+  });
+  const diff = round1(homeRuns - awayRuns);
+  const favorite = probability.favorite === "home" ? homeName : awayName;
+  const underdog = probability.favorite === "home" ? awayName : homeName;
+  const winProbability = probability.value;
+  const totalLean = recomendacionTotal(totalRuns, odds.overUnder);
+  const runLinePick = calcularHandicap({ diff, favorite, underdog });
+  const confidence = calcularConfianza({
+    diff: Math.abs(diff),
+    winProbability,
+    awayScore: probability.awayComposite,
+    homeScore: probability.homeComposite,
+  });
+  const totalConfidence = odds.overUnder ? confidenceFromTotalEdge(Math.abs(totalRuns - odds.overUnder)) : "Media";
+  const explanation = buildExplanation({
+    awayName,
+    homeName,
+    awayPitcherMetrics,
+    homePitcherMetrics,
+    awayOffense,
+    homeOffense,
+    awayForm,
+    homeForm,
+    awayBullpen,
+    homeBullpen,
+    odds,
+    totalRuns,
+  });
+  const finalPick = generarPronosticoFinal({
+    ganador: favorite,
+    probabilidadGanador: Math.round(winProbability * 100),
+    carrerasEquipoVisitante: round1(awayRuns),
+    carrerasEquipoLocal: round1(homeRuns),
+    totalCarreras: totalRuns,
+    recomendacionTotal: totalLean,
+    handicap: runLinePick,
+    hitsTotales: totalHits,
+    confianza: confidence,
+    marcadorEstimado: `${awayName} ${Math.max(1, Math.round(awayRuns))} - ${homeName} ${Math.max(1, Math.round(homeRuns))}`,
+    explicacion: explanation,
+  });
+
+  return {
+    ...finalPick,
+    game,
+    awayName,
+    homeName,
+    awayRuns: round1(awayRuns),
+    homeRuns: round1(homeRuns),
+    awayHits: round1(awayHits),
+    homeHits: round1(homeHits),
+    totalRuns,
+    totalHits,
+    diff,
+    favorite,
+    winProbability,
+    runLinePick,
+    totalLean,
+    confidence,
+    totalConfidence,
+    odds,
+    pitchers: {
+      away: awayPitcher,
+      home: homePitcher,
+    },
+    model: {
+      awayPitcherMetrics,
+      homePitcherMetrics,
+      awayOffense,
+      homeOffense,
+      awayForm,
+      homeForm,
+      awayBullpen,
+      homeBullpen,
+      awayMatchup,
+      homeMatchup,
+    },
+    rows: [
+      {
+        market: "Ganador",
+        pick: favorite,
+        estimate: `${Math.round(winProbability * 100)}%`,
+        confidence,
+        base: explanation[0] || `Carreras: ${awayName} ${round1(awayRuns)} - ${homeName} ${round1(homeRuns)}`,
+      },
+      {
+        market: "Total carreras",
+        pick: totalLean,
+        estimate: totalRuns.toFixed(1),
+        confidence: totalConfidence,
+        base: odds.overUnder
+          ? `Linea ESPN: ${odds.overUnder}; modelo pondera pitcher, ofensiva, forma, bullpen, localia y matchup`
+          : "Modelo pondera pitcher, ofensiva, forma, bullpen, localia y matchup",
+      },
+      {
+        market: "Handicap",
+        pick: runLinePick,
+        estimate: `${favorite} +${round1(Math.abs(diff))}`,
+        confidence: Math.abs(diff) >= 1.25 ? confidence : "Baja",
+        base: "Diferencia proyectada de carreras con ventaja del modelo",
+      },
+      {
+        market: "Hits totales",
+        pick: totalHits >= 16.7 ? "Over hits" : totalHits <= 14.2 ? "Under hits" : "Rango medio",
+        estimate: totalHits.toFixed(1),
+        confidence: totalHits >= 17.6 || totalHits <= 13.4 ? "Media" : "Baja",
+        base: `${awayName} ${round1(awayHits)} H, ${homeName} ${round1(homeHits)} H`,
+      },
+      {
+        market: "Marcador estimado",
+        pick: finalPick.marcadorEstimado,
+        estimate: `${totalRuns.toFixed(1)} carreras`,
+        confidence: "Referencia",
+        base: explanation.slice(1, 3).join(" "),
+      },
+    ],
+  };
+
+  }
 
   const awayRuns = expectedRuns(awayStats, homeStats, homePitcher);
   const homeRuns = expectedRuns(homeStats, awayStats, awayPitcher);
@@ -231,99 +409,427 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   };
 }
 
-function expectedRuns(team, opponent, opponentStarter) {
-  const offense = fallback(team.runsPerGame, LEAGUE.runsPerGame);
-  const prevention = fallback(opponent.runsAllowedPerGame, LEAGUE.runsPerGame);
-  const offenseAdjustment = teamOffenseAdjustment(team);
-  const opponentAdjustment = teamPitchingAdjustment(opponent);
-  const starterAdjustment = starterRunAdjustment(opponentStarter);
+function calcularMetricasPitcher(pitcher = {}) {
+  const innings = fallback(pitcher?.innings, LEAGUE.starterInnings * 8);
+  const recent = pitcher?.recentStarts || {};
+  const recentRuns = Number.isFinite(recent.runsAllowedPerStart) ? recent.runsAllowedPerStart : LEAGUE.runsPerGame * 0.55;
+  const recentHits = Number.isFinite(recent.hitsAllowedPerStart) ? recent.hitsAllowedPerStart : LEAGUE.hitsPerGame * 0.55;
+  const metrics = {
+    era: fallback(pitcher?.era, LEAGUE.era),
+    whip: fallback(pitcher?.whip, LEAGUE.whip),
+    innings,
+    hits: numberOr(pitcher?.hits, (LEAGUE.pitcherHits9 * innings) / 9),
+    runs: numberOr(pitcher?.runs, (LEAGUE.runsPerGame * innings) / 9),
+    earnedRuns: numberOr(pitcher?.earnedRuns, (LEAGUE.era * innings) / 9),
+    strikeouts: numberOr(pitcher?.strikeouts, (LEAGUE.pitcherK9 * innings) / 9),
+    walks: numberOr(pitcher?.walks, (LEAGUE.pitcherBb9 * innings) / 9),
+    homeRuns: numberOr(pitcher?.homeRuns, (LEAGUE.pitcherHr9 * innings) / 9),
+    k9: fallback(pitcher?.k9, LEAGUE.pitcherK9),
+    bb9: fallback(pitcher?.bb9, LEAGUE.pitcherBb9),
+    hr9: fallback(pitcher?.hr9, LEAGUE.pitcherHr9),
+    hitsPerNine: fallback(pitcher?.hitsPerNine, LEAGUE.pitcherHits9),
+    inningsPerStart: fallback(pitcher?.inningsPerStart, LEAGUE.starterInnings),
+    wins: numberOr(pitcher?.wins, 0),
+    losses: numberOr(pitcher?.losses, 0),
+    throws: pitcher?.throws || pitcher?.pitchHand || "",
+    recentStarts: numberOr(recent.count, 0),
+    recentRuns,
+    recentHits,
+  };
+  const score =
+    normalizeLower(metrics.era, 2.4, 6.2) * 0.22 +
+    normalizeLower(metrics.whip, 0.95, 1.65) * 0.18 +
+    normalizeHigher(metrics.k9, 5.5, 11.8) * 0.14 +
+    normalizeLower(metrics.bb9, 1.4, 5.0) * 0.1 +
+    normalizeLower(metrics.hr9, 0.55, 1.95) * 0.1 +
+    normalizeLower(metrics.hitsPerNine, 6.2, 10.8) * 0.08 +
+    normalizeHigher(metrics.inningsPerStart, 3.8, 6.6) * 0.08 +
+    normalizeLower(recentRuns, 1.1, 4.8) * 0.07 +
+    normalizeLower(recentHits, 3.4, 8.4) * 0.03;
+
+  return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
+}
+
+function calcularOfensivaEquipo(team = {}) {
+  const metrics = {
+    runsPerGame: fallback(team.runsPerGame, LEAGUE.runsPerGame),
+    hitsPerGame: fallback(team.hitsPerGame, LEAGUE.hitsPerGame),
+    ops: fallback(team.ops, LEAGUE.ops),
+    obp: fallback(team.obp, LEAGUE.obp),
+    slg: fallback(team.slg, LEAGUE.slg),
+    battingAverage: fallback(team.battingAverage, LEAGUE.battingAverage),
+    strikeoutsPerGame: fallback(team.strikeoutsPerGame, LEAGUE.strikeoutsPerGame),
+    walksPerGame: fallback(team.walksPerGame, LEAGUE.walksPerGame),
+    homeRunsPerGame: fallback(team.homeRunsPerGame, LEAGUE.homeRunsPerGame),
+  };
+  const score =
+    normalizeHigher(metrics.runsPerGame, 3.2, 5.8) * 0.23 +
+    normalizeHigher(metrics.ops, 0.63, 0.82) * 0.2 +
+    normalizeHigher(metrics.obp, 0.285, 0.355) * 0.13 +
+    normalizeHigher(metrics.slg, 0.345, 0.47) * 0.13 +
+    normalizeHigher(metrics.hitsPerGame, 6.7, 9.8) * 0.11 +
+    normalizeHigher(metrics.walksPerGame, 2.4, 4.2) * 0.07 +
+    normalizeHigher(metrics.homeRunsPerGame, 0.65, 1.65) * 0.07 +
+    normalizeLower(metrics.strikeoutsPerGame, 6.6, 10.3) * 0.06;
+
+  return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
+}
+
+function calcularFormaReciente(context = {}) {
+  const last5 = context?.last5 || {};
+  const last10 = context?.last10 || {};
+  const metrics = {
+    games5: numberOr(last5.games, 0),
+    games10: numberOr(last10.games, 0),
+    wins5: numberOr(last5.wins, 0),
+    wins10: numberOr(last10.wins, 0),
+    runsFor5: fallback(last5.runsForPerGame, LEAGUE.runsPerGame),
+    runsAllowed5: fallback(last5.runsAllowedPerGame, LEAGUE.runsPerGame),
+    hits5: fallback(last5.hitsPerGame, LEAGUE.hitsPerGame),
+    runsFor10: fallback(last10.runsForPerGame, LEAGUE.runsPerGame),
+    runsAllowed10: fallback(last10.runsAllowedPerGame, LEAGUE.runsPerGame),
+    overRate: Number.isFinite(last10.overRate) ? last10.overRate : 0.5,
+  };
+  const winRate5 = metrics.games5 ? metrics.wins5 / metrics.games5 : 0.5;
+  const winRate10 = metrics.games10 ? metrics.wins10 / metrics.games10 : 0.5;
+  const runDiff5 = metrics.runsFor5 - metrics.runsAllowed5;
+  const runDiff10 = metrics.runsFor10 - metrics.runsAllowed10;
+  const score =
+    normalizeHigher(winRate5, 0.2, 0.8) * 0.24 +
+    normalizeHigher(winRate10, 0.25, 0.75) * 0.16 +
+    normalizeHigher(runDiff5, -2.2, 2.2) * 0.24 +
+    normalizeHigher(runDiff10, -1.7, 1.7) * 0.17 +
+    normalizeHigher(metrics.runsFor5, 2.8, 6.2) * 0.11 +
+    normalizeLower(metrics.runsAllowed5, 2.8, 6.2) * 0.08;
+
+  return { ...metrics, winRate5, winRate10, runDiff5, runDiff10, score: clamp(score, 0, 1), label: scoreLabel(score) };
+}
+
+function calcularBullpenAproximado(bullpen = {}) {
+  const innings7 = numberOr(bullpen?.innings7, 0);
+  const metrics = {
+    relieversAvailable: numberOr(bullpen?.relieversAvailable, 7),
+    innings7,
+    innings3: numberOr(bullpen?.innings3, 0),
+    runs7: innings7 > 0 ? numberOr(bullpen?.runs7, (LEAGUE.runsPerGame * innings7) / 9) : LEAGUE.runsPerGame,
+    earnedRuns7: innings7 > 0 ? numberOr(bullpen?.earnedRuns7, (LEAGUE.era * innings7) / 9) : LEAGUE.era,
+    hits7: innings7 > 0 ? numberOr(bullpen?.hits7, (LEAGUE.hitsPerGame * innings7) / 9) : LEAGUE.hitsPerGame,
+    walks7: innings7 > 0 ? numberOr(bullpen?.walks7, (LEAGUE.walksPerGame * innings7) / 9) : LEAGUE.walksPerGame,
+    pitches3: numberOr(bullpen?.pitches3, 0),
+    outingsBackToBack: numberOr(bullpen?.outingsBackToBack, 0),
+  };
+  metrics.era = innings7 > 0 ? (metrics.earnedRuns7 * 9) / innings7 : LEAGUE.era;
+  metrics.whip = innings7 > 0 ? (metrics.hits7 + metrics.walks7) / innings7 : LEAGUE.whip;
+  metrics.runsPerNine = innings7 > 0 ? (metrics.runs7 / innings7) * 9 : LEAGUE.runsPerGame;
+  metrics.fatigue = clamp(
+    normalizeHigher(metrics.innings3, 4, 14) * 0.52 +
+      normalizeHigher(metrics.pitches3, 70, 230) * 0.34 +
+      normalizeHigher(metrics.outingsBackToBack, 0, 5) * 0.14,
+    0,
+    1
+  );
+  const score =
+    normalizeLower(metrics.era, 2.8, 5.8) * 0.33 +
+    normalizeLower(metrics.whip, 1.05, 1.65) * 0.25 +
+    normalizeLower(metrics.runsPerNine, 2.8, 6.3) * 0.17 +
+    normalizeLower(metrics.fatigue, 0, 1) * 0.18 +
+    normalizeHigher(metrics.relieversAvailable, 5, 10) * 0.07;
+
+  return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
+}
+
+function calcularVentajaLocalia(team = {}, context = {}, isHome = false) {
+  const record = isHome ? team.homeRecord : team.awayRecord;
+  const pct = Number.isFinite(record?.pct) ? record.pct : 0.5;
+  const recentLocationPct = isHome ? context?.homeWinRate : context?.awayWinRate;
+  const base = isHome ? 0.53 : 0.47;
+  const score = clamp(base + (pct - 0.5) * 0.35 + (numberOr(recentLocationPct, 0.5) - 0.5) * 0.15, 0.35, 0.65);
+  return { score, isHome, recordPct: pct, label: isHome ? "Local" : "Visitante" };
+}
+
+function calcularMatchup(offense, opponentPitcher, opponentBullpen, recentForm) {
+  const pitcherWeakness = 1 - numberOr(opponentPitcher?.score, 0.5);
+  const bullpenWeakness = 1 - numberOr(opponentBullpen?.score, 0.5);
+  const score =
+    numberOr(offense?.score, 0.5) * 0.38 +
+    pitcherWeakness * 0.3 +
+    bullpenWeakness * 0.16 +
+    numberOr(recentForm?.score, 0.5) * 0.16;
+
+  return { score: clamp(score, 0, 1), pitcherWeakness, bullpenWeakness, label: scoreLabel(score) };
+}
+
+function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPitcher, opponentBullpen, recentForm, localia, matchup, isHome }) {
+  const base =
+    fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame) * 0.34 +
+    fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame) * 0.22 +
+    LEAGUE.runsPerGame * 0.14 +
+    fallback(recentForm?.runsFor5, LEAGUE.runsPerGame) * 0.1 +
+    fallback(recentForm?.runsFor10, LEAGUE.runsPerGame) * 0.07 +
+    fallback(opponentPitcher?.era, LEAGUE.era) * 0.08 +
+    fallback(opponentBullpen?.era, LEAGUE.era) * 0.05;
   const raw =
-    offense * 0.44 +
-    prevention * 0.24 +
-    LEAGUE.runsPerGame * 0.16 +
-    offenseAdjustment +
-    opponentAdjustment +
-    starterAdjustment;
-  return clamp(raw, 1.8, 8.8);
+    base +
+    (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 1.45 +
+    (numberOr(offense?.score, 0.5) - 0.5) * 1.1 +
+    (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.76 +
+    (numberOr(recentForm?.score, 0.5) - 0.5) * 0.64 +
+    (numberOr(localia?.score, isHome ? 0.53 : 0.47) - 0.5) * 0.62 +
+    (numberOr(matchup?.score, 0.5) - 0.5) * 0.72;
+
+  return clamp(raw, 2.1, 7.6);
 }
 
-function expectedHits(team, opponent, opponentStarter) {
-  const offense = fallback(team.hitsPerGame, LEAGUE.hitsPerGame);
-  const allowed = fallback(opponent.hitsAllowedPerGame, LEAGUE.hitsPerGame);
-  const starterWhip = fallback(opponentStarter?.whip, fallback(opponent.whip, LEAGUE.whip));
-  const starterHits9 = fallback(opponentStarter?.hitsPerNine, LEAGUE.pitcherHits9);
-  const starterK9 = fallback(opponentStarter?.k9, LEAGUE.pitcherK9);
-  const contactProfile =
-    (fallback(team.battingAverage, 0.245) - 0.245) * 10 +
-    (fallback(team.strikeoutsPerGame, LEAGUE.strikeoutsPerGame) - LEAGUE.strikeoutsPerGame) * -0.08;
-  const raw =
-    offense * 0.46 +
-    allowed * 0.24 +
-    LEAGUE.hitsPerGame * 0.12 +
-    (starterWhip - LEAGUE.whip) * 1.65 +
-    (starterHits9 - LEAGUE.pitcherHits9) * 0.16 +
-    (starterK9 - LEAGUE.pitcherK9) * -0.11 +
-    contactProfile;
-  return clamp(raw, 4.8, 12.5);
+function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScores }) {
+  const weights = { pitcher: 0.3, offense: 0.25, form: 0.15, bullpen: 0.15, localia: 0.05, matchup: 0.1 };
+  const awayComposite = weightedTeamScore(awayScores, weights);
+  const homeComposite = weightedTeamScore(homeScores, weights);
+  const runEdge = clamp((homeRuns - awayRuns) / 4.5, -0.42, 0.42);
+  const modelEdge = clamp((homeComposite - awayComposite) * 1.35, -0.25, 0.25);
+  const homeProb = clamp(0.5 + runEdge * 0.52 + modelEdge * 0.48, 0.28, 0.72);
+  const favorite = homeProb >= 0.5 ? "home" : "away";
+
+  return {
+    favorite,
+    value: favorite === "home" ? homeProb : 1 - homeProb,
+    homeProb,
+    awayComposite,
+    homeComposite,
+  };
 }
 
-function teamOffenseAdjustment(team) {
-  const ops = fallback(team.ops, LEAGUE.ops);
-  const obp = fallback(team.obp, LEAGUE.obp);
-  const slg = fallback(team.slg, LEAGUE.slg);
-  const homeRuns = fallback(team.homeRunsPerGame, LEAGUE.homeRunsPerGame);
-  const walks = fallback(team.walksPerGame, LEAGUE.walksPerGame);
-  const strikeouts = fallback(team.strikeoutsPerGame, LEAGUE.strikeoutsPerGame);
-
-  return (
-    (ops - LEAGUE.ops) * 2.10 +
-    (obp - LEAGUE.obp) * 2.40 +
-    (slg - LEAGUE.slg) * 1.30 +
-    (homeRuns - LEAGUE.homeRunsPerGame) * 0.20 +
-    (walks - LEAGUE.walksPerGame) * 0.10 -
-    (strikeouts - LEAGUE.strikeoutsPerGame) * 0.055
-  );
+function calcularTotalCarreras(awayRuns, homeRuns) {
+  return round1(clamp(awayRuns + homeRuns, 5, 13.5));
 }
 
-function teamPitchingAdjustment(team) {
-  const era = fallback(team.era, LEAGUE.era);
-  const whip = fallback(team.whip, LEAGUE.whip);
-  const hitsAllowed = fallback(team.hitsAllowedPerGame, LEAGUE.hitsPerGame);
-  const walksAllowed = fallback(team.walksAllowedPerGame, LEAGUE.walksPerGame);
-  const homersAllowed = fallback(team.homeRunsAllowedPerGame, LEAGUE.homeRunsPerGame);
-  const strikeouts = fallback(team.pitchingStrikeoutsPerGame, LEAGUE.strikeoutsPerGame);
-
-  return (
-    (era - LEAGUE.era) * 0.08 +
-    (whip - LEAGUE.whip) * 0.35 +
-    (hitsAllowed - LEAGUE.hitsPerGame) * 0.035 +
-    (walksAllowed - LEAGUE.walksPerGame) * 0.055 +
-    (homersAllowed - LEAGUE.homeRunsPerGame) * 0.16 -
-    (strikeouts - LEAGUE.strikeoutsPerGame) * 0.025
-  );
+function calcularHandicap({ diff, favorite, underdog }) {
+  return Math.abs(diff) >= 1.25 ? `${favorite} -1.5` : `${underdog} +1.5`;
 }
 
-function starterRunAdjustment(starter) {
-  const era = fallback(starter?.era, LEAGUE.era);
-  const whip = fallback(starter?.whip, LEAGUE.whip);
-  const k9 = fallback(starter?.k9, LEAGUE.pitcherK9);
-  const bb9 = fallback(starter?.bb9, LEAGUE.pitcherBb9);
-  const hr9 = fallback(starter?.hr9, LEAGUE.pitcherHr9);
-  const hits9 = fallback(starter?.hitsPerNine, LEAGUE.pitcherHits9);
-  const startLength = fallback(starter?.inningsPerStart, LEAGUE.starterInnings);
-  const starterShare = clamp(startLength / 6, 0.55, 1.05);
-  const bullpenExposure = clamp(LEAGUE.starterInnings - startLength, -0.8, 1.4) * 0.06;
+function calcularHitsTotales(awayStats, homeStats, homePitcher, awayPitcher, awayForm, homeForm) {
+  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcher, awayForm);
+  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcher, homeForm);
+  return round1(clamp(awayHits + homeHits, 11.5, 22.5));
+}
 
-  return (
-    ((era - LEAGUE.era) * 0.11 +
-      (whip - LEAGUE.whip) * 0.78 +
-      (bb9 - LEAGUE.pitcherBb9) * 0.055 +
-      (hr9 - LEAGUE.pitcherHr9) * 0.20 +
-      (hits9 - LEAGUE.pitcherHits9) * 0.035 -
-      (k9 - LEAGUE.pitcherK9) * 0.035) *
-      starterShare +
-    bullpenExposure
-  );
+function calcularConfianza({ diff, winProbability, awayScore, homeScore }) {
+  const modelGap = Math.abs(homeScore - awayScore);
+  if (diff >= 1.7 && winProbability >= 0.6 && modelGap >= 0.09) return "Alta";
+  if (diff >= 0.85 && winProbability >= 0.55 && modelGap >= 0.045) return "Media";
+  return "Baja";
+}
+
+function generarPronosticoFinal(result) {
+  return {
+    ganador: result.ganador || "",
+    probabilidadGanador: Math.round(numberOr(result.probabilidadGanador, 0)),
+    carrerasEquipoVisitante: round1(numberOr(result.carrerasEquipoVisitante, 0)),
+    carrerasEquipoLocal: round1(numberOr(result.carrerasEquipoLocal, 0)),
+    totalCarreras: round1(numberOr(result.totalCarreras, 0)),
+    recomendacionTotal: result.recomendacionTotal || "",
+    handicap: result.handicap || "",
+    hitsTotales: round1(numberOr(result.hitsTotales, 0)),
+    confianza: result.confianza || "Baja",
+    marcadorEstimado: result.marcadorEstimado || "",
+    explicacion: Array.isArray(result.explicacion) ? result.explicacion : [],
+  };
+}
+
+async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
+  const cacheKey = `${teamId}-${referenceDate}-${probablePitcherId || "na"}`;
+  if (state.recentContexts.has(cacheKey)) return state.recentContexts.get(cacheKey);
+
+  try {
+    const end = addDays(referenceDate, -1);
+    const start = addDays(referenceDate, -24);
+    const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
+    const games = (schedule.dates || [])
+      .flatMap((date) => date.games || [])
+      .filter((game) => game.status?.abstractGameState === "Final")
+      .slice(-10);
+    const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
+    const parsedGames = [];
+    const bullpenGames = [];
+
+    games.forEach((game, index) => {
+      const boxscore = boxscores[index].status === "fulfilled" ? boxscores[index].value : null;
+      const parsed = parseRecentTeamGame(game, boxscore, teamId);
+      if (!parsed) return;
+      parsedGames.push(parsed);
+      bullpenGames.push(parsed.bullpen);
+    });
+
+    const roster = await getActivePitchers(teamId, probablePitcherId);
+    const context = {
+      games: parsedGames,
+      last5: aggregateRecentGames(parsedGames.slice(-5)),
+      last10: aggregateRecentGames(parsedGames),
+      bullpen: aggregateBullpenGames(bullpenGames, referenceDate, roster.relieversAvailable),
+      homeWinRate: locationWinRate(parsedGames, true),
+      awayWinRate: locationWinRate(parsedGames, false),
+    };
+    state.recentContexts.set(cacheKey, context);
+    return context;
+  } catch {
+    const neutral = {
+      games: [],
+      last5: aggregateRecentGames([]),
+      last10: aggregateRecentGames([]),
+      bullpen: aggregateBullpenGames([], referenceDate, 7),
+      homeWinRate: 0.5,
+      awayWinRate: 0.5,
+    };
+    state.recentContexts.set(cacheKey, neutral);
+    return neutral;
+  }
+}
+
+async function getActivePitchers(teamId, probablePitcherId) {
+  try {
+    const data = await fetchJson(`${MLB_BASE}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=season,group=pitching))`);
+    const pitchers = (data.roster || []).filter((item) => item.position?.type === "Pitcher");
+    const relievers = pitchers.filter((item) => {
+      const stat = item.person?.stats?.[0]?.splits?.[0]?.stat || {};
+      const games = number(stat.gamesPlayed);
+      const starts = number(stat.gamesStarted);
+      return item.person?.id !== probablePitcherId && (games === 0 || starts <= Math.max(1, games * 0.45));
+    });
+    return { pitchers, relieversAvailable: relievers.length || Math.max(pitchers.length - 5, 6) };
+  } catch {
+    return { pitchers: [], relieversAvailable: 7 };
+  }
+}
+
+function parseRecentTeamGame(game, boxscore, teamId) {
+  const side = game.teams?.home?.team?.id === teamId ? "home" : game.teams?.away?.team?.id === teamId ? "away" : null;
+  if (!side) return null;
+  const opponentSide = side === "home" ? "away" : "home";
+  const linescore = game.linescore?.teams || {};
+  const teamScore = number(game.teams?.[side]?.score);
+  const opponentScore = number(game.teams?.[opponentSide]?.score);
+  const teamHits = number(linescore?.[side]?.hits);
+  const opponentHits = number(linescore?.[opponentSide]?.hits);
+  const teamBlock = boxscore?.teams?.[side];
+  const bullpen = parseBullpenFromBoxscore(teamBlock, game.officialDate);
+
+  return {
+    gamePk: game.gamePk,
+    date: game.officialDate,
+    isHome: side === "home",
+    runsFor: teamScore,
+    runsAllowed: opponentScore,
+    hits: teamHits || estimateHitsFromRuns(teamScore),
+    opponentHits: opponentHits || estimateHitsFromRuns(opponentScore),
+    win: teamScore > opponentScore,
+    totalRuns: teamScore + opponentScore,
+    over: teamScore + opponentScore >= LEAGUE.totalRunsLine,
+    bullpen,
+  };
+}
+
+function parseBullpenFromBoxscore(teamBlock, officialDate) {
+  const pitcherIds = teamBlock?.pitchers || [];
+  const starterId = pitcherIds[0];
+  const result = {
+    date: officialDate,
+    innings: 0,
+    runs: 0,
+    earnedRuns: 0,
+    hits: 0,
+    walks: 0,
+    pitches: 0,
+    relieversUsed: 0,
+    relieverIds: [],
+  };
+
+  pitcherIds.slice(1).forEach((pitcherId) => {
+    if (!pitcherId || pitcherId === starterId) return;
+    const player = teamBlock.players?.[`ID${pitcherId}`];
+    const pitching = player?.stats?.pitching;
+    const innings = inningsToNumber(pitching?.inningsPitched);
+    if (!innings) return;
+    result.innings += innings;
+    result.runs += number(pitching.runs);
+    result.earnedRuns += number(pitching.earnedRuns);
+    result.hits += number(pitching.hits);
+    result.walks += number(pitching.baseOnBalls);
+    result.pitches += number(pitching.pitchesThrown);
+    result.relieversUsed += 1;
+    result.relieverIds.push(pitcherId);
+  });
+
+  return result;
+}
+
+function aggregateRecentGames(games) {
+  const count = games.length;
+  if (!count) {
+    return {
+      games: 0,
+      wins: 0,
+      losses: 0,
+      runsForPerGame: LEAGUE.runsPerGame,
+      runsAllowedPerGame: LEAGUE.runsPerGame,
+      hitsPerGame: LEAGUE.hitsPerGame,
+      overRate: 0.5,
+    };
+  }
+
+  return {
+    games: count,
+    wins: games.filter((game) => game.win).length,
+    losses: games.filter((game) => !game.win).length,
+    runsForPerGame: average(games.map((game) => game.runsFor)),
+    runsAllowedPerGame: average(games.map((game) => game.runsAllowed)),
+    hitsPerGame: average(games.map((game) => game.hits)),
+    overRate: games.filter((game) => game.over).length / count,
+  };
+}
+
+function aggregateBullpenGames(bullpenGames, referenceDate, relieversAvailable) {
+  const cutoff7 = addDays(referenceDate, -7);
+  const cutoff3 = addDays(referenceDate, -3);
+  const recent7 = bullpenGames.filter((item) => item?.date >= cutoff7);
+  const recent3 = bullpenGames.filter((item) => item?.date >= cutoff3);
+  const relieverUse = new Map();
+  recent3.forEach((game) => {
+    (game.relieverIds || []).forEach((id) => relieverUse.set(id, (relieverUse.get(id) || 0) + 1));
+  });
+
+  return {
+    relieversAvailable,
+    innings7: sum(recent7.map((game) => game.innings)),
+    innings3: sum(recent3.map((game) => game.innings)),
+    runs7: sum(recent7.map((game) => game.runs)),
+    earnedRuns7: sum(recent7.map((game) => game.earnedRuns)),
+    hits7: sum(recent7.map((game) => game.hits)),
+    walks7: sum(recent7.map((game) => game.walks)),
+    pitches3: sum(recent3.map((game) => game.pitches)),
+    outingsBackToBack: [...relieverUse.values()].filter((uses) => uses >= 2).length,
+  };
+}
+
+function summarizePitcherRecentStarts(splits) {
+  const starts = (splits || [])
+    .filter((split) => number(split.stat?.gamesStarted) > 0 || inningsToNumber(split.stat?.inningsPitched) >= 3)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, 5);
+
+  if (!starts.length) {
+    return {
+      count: 0,
+      inningsPerStart: LEAGUE.starterInnings,
+      runsAllowedPerStart: LEAGUE.runsPerGame * 0.55,
+      hitsAllowedPerStart: LEAGUE.hitsPerGame * 0.55,
+    };
+  }
+
+  return {
+    count: starts.length,
+    inningsPerStart: average(starts.map((split) => inningsToNumber(split.stat?.inningsPitched))),
+    runsAllowedPerStart: average(starts.map((split) => number(split.stat?.runs))),
+    hitsAllowedPerStart: average(starts.map((split) => number(split.stat?.hits))),
+  };
 }
 
 async function getTeamStats(teamId) {
@@ -362,12 +868,21 @@ async function getTeamStats(teamId) {
   return normalized;
 }
 
-async function getPitcherStats(playerId) {
+async function getPitcherStats(playerId, season = new Date().getFullYear()) {
   if (!playerId) return null;
-  if (state.pitcherStats.has(playerId)) return state.pitcherStats.get(playerId);
+  const cacheKey = `${playerId}-${season}`;
+  if (state.pitcherStats.has(cacheKey)) return state.pitcherStats.get(cacheKey);
 
   try {
-    const data = await fetchJson(`${MLB_BASE}/people/${playerId}/stats?stats=season&group=pitching`);
+    const [seasonResult, personResult, gameLogResult] = await Promise.allSettled([
+      fetchJson(`${MLB_BASE}/people/${playerId}/stats?stats=season&group=pitching`),
+      fetchJson(`${MLB_BASE}/people/${playerId}`),
+      fetchJson(`${MLB_BASE}/people/${playerId}/stats?stats=gameLog&group=pitching&season=${season}`),
+    ]);
+    if (seasonResult.status !== "fulfilled") throw new Error("Pitcher season stats unavailable");
+    const data = seasonResult.value;
+    const person = personResult.status === "fulfilled" ? personResult.value?.people?.[0] || {} : {};
+    const gameLog = gameLogResult.status === "fulfilled" ? gameLogResult.value?.stats?.[0]?.splits || [] : [];
     const stat = data.stats?.[0]?.splits?.[0]?.stat || {};
     const innings = inningsToNumber(stat.inningsPitched);
     const starts = number(stat.gamesStarted);
@@ -375,7 +890,10 @@ async function getPitcherStats(playerId) {
     const strikeouts = number(stat.strikeOuts);
     const walks = number(stat.baseOnBalls);
     const hits = number(stat.hits);
+    const runs = number(stat.runs);
+    const earnedRuns = number(stat.earnedRuns);
     const homeRuns = number(stat.homeRuns);
+    const recentStarts = summarizePitcherRecentStarts(gameLog);
     const normalized = {
       era: number(stat.era) || LEAGUE.era,
       whip: number(stat.whip) || LEAGUE.whip,
@@ -386,6 +904,8 @@ async function getPitcherStats(playerId) {
       wins: number(stat.wins),
       losses: number(stat.losses),
       hits,
+      runs,
+      earnedRuns,
       strikeouts,
       walks,
       homeRuns,
@@ -394,11 +914,14 @@ async function getPitcherStats(playerId) {
       hr9: ratePerNine(homeRuns, innings),
       hitsPerNine: ratePerNine(hits, innings),
       inningsPerStart: starts ? innings / starts : innings / Math.max(games, 1),
+      throws: person.pitchHand?.code || person.pitchHand?.description || "",
+      pitchHand: person.pitchHand?.code || "",
+      recentStarts,
     };
-    state.pitcherStats.set(playerId, normalized);
+    state.pitcherStats.set(cacheKey, normalized);
     return normalized;
   } catch {
-    state.pitcherStats.set(playerId, null);
+    state.pitcherStats.set(cacheKey, null);
     return null;
   }
 }
@@ -449,6 +972,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       innings: mlbPitcher?.innings || null,
       inningsDisplay: mlbPitcher?.inningsDisplay || "",
       hits: mlbPitcher?.hits || null,
+      runs: mlbPitcher?.runs || null,
+      earnedRuns: mlbPitcher?.earnedRuns || null,
       strikeouts: mlbPitcher?.strikeouts || null,
       walks: mlbPitcher?.walks || null,
       homeRuns: mlbPitcher?.homeRuns || null,
@@ -457,6 +982,9 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       hr9: mlbPitcher?.hr9 || null,
       hitsPerNine: mlbPitcher?.hitsPerNine || null,
       inningsPerStart: mlbPitcher?.inningsPerStart || null,
+      throws: mlbPitcher?.throws || espnPitcher.throws || "",
+      pitchHand: mlbPitcher?.pitchHand || "",
+      recentStarts: mlbPitcher?.recentStarts || null,
       wins: Number.isFinite(espnPitcher.wins) ? espnPitcher.wins : mlbPitcher?.wins,
       losses: Number.isFinite(espnPitcher.losses) ? espnPitcher.losses : mlbPitcher?.losses,
       source: "ESPN",
@@ -482,6 +1010,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       innings: mlbPitcher?.innings || null,
       inningsDisplay: mlbPitcher?.inningsDisplay || "",
       hits: mlbPitcher?.hits || null,
+      runs: mlbPitcher?.runs || null,
+      earnedRuns: mlbPitcher?.earnedRuns || null,
       strikeouts: mlbPitcher?.strikeouts || null,
       walks: mlbPitcher?.walks || null,
       homeRuns: mlbPitcher?.homeRuns || null,
@@ -490,6 +1020,9 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       hr9: mlbPitcher?.hr9 || null,
       hitsPerNine: mlbPitcher?.hitsPerNine || null,
       inningsPerStart: mlbPitcher?.inningsPerStart || null,
+      throws: mlbPitcher?.throws || "",
+      pitchHand: mlbPitcher?.pitchHand || "",
+      recentStarts: mlbPitcher?.recentStarts || null,
       wins: mlbPitcher?.wins ?? null,
       losses: mlbPitcher?.losses ?? null,
       saves: null,
@@ -764,6 +1297,30 @@ function extractEspnOdds(event) {
   };
 }
 
+function extractEspnTeamRecords(event) {
+  const result = { away: {}, home: {} };
+  const competitors = event?.competitions?.[0]?.competitors || [];
+  competitors.forEach((competitor) => {
+    const side = competitor.homeAway;
+    if (side !== "away" && side !== "home") return;
+    const records = competitor.records || [];
+    result[side] = {
+      overallRecord: parseRecord(records.find((record) => record.type === "total" || record.name === "overall")?.summary),
+      homeRecord: parseRecord(records.find((record) => record.type === "home" || record.name === "Home")?.summary),
+      awayRecord: parseRecord(records.find((record) => record.type === "road" || record.name === "Road")?.summary),
+    };
+  });
+  return result;
+}
+
+function parseRecord(summary) {
+  const match = String(summary || "").match(/(\d+)\s*-\s*(\d+)/);
+  if (!match) return null;
+  const wins = Number(match[1]);
+  const losses = Number(match[2]);
+  return { wins, losses, pct: wins + losses ? wins / (wins + losses) : 0.5 };
+}
+
 function statsArrayToObject(stats) {
   return stats.reduce((acc, item) => {
     acc[item.name] = item.displayValue;
@@ -819,6 +1376,89 @@ function confidenceFromTotalEdge(edge) {
   if (edge >= 1.2) return "Alta";
   if (edge >= 0.6) return "Media";
   return "Baja";
+}
+
+function recomendacionTotal(totalRuns, line) {
+  if (line) {
+    if (totalRuns >= line + 0.45) return `Over ${line}`;
+    if (totalRuns <= line - 0.45) return `Under ${line}`;
+    return `Cerca de ${line}`;
+  }
+
+  if (totalRuns >= 8.9) return "Over estimado";
+  if (totalRuns <= 7.4) return "Under estimado";
+  return "Total medio";
+}
+
+function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm) {
+  const raw =
+    fallback(team?.hitsPerGame, LEAGUE.hitsPerGame) * 0.44 +
+    fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame) * 0.2 +
+    LEAGUE.hitsPerGame * 0.13 +
+    fallback(recentForm?.hits5, LEAGUE.hitsPerGame) * 0.1 +
+    (fallback(opponentPitcher?.whip, LEAGUE.whip) - LEAGUE.whip) * 1.35 +
+    (fallback(opponentPitcher?.hitsPerNine, LEAGUE.pitcherHits9) - LEAGUE.pitcherHits9) * 0.13 -
+    (fallback(opponentPitcher?.k9, LEAGUE.pitcherK9) - LEAGUE.pitcherK9) * 0.08 +
+    (fallback(team?.battingAverage, LEAGUE.battingAverage) - LEAGUE.battingAverage) * 9;
+
+  return clamp(raw, 5.1, 11.8);
+}
+
+function buildExplanation(model) {
+  const pitcherEdge = model.homePitcherMetrics.score - model.awayPitcherMetrics.score;
+  const offenseEdge = model.homeOffense.score - model.awayOffense.score;
+  const formEdge = model.homeForm.score - model.awayForm.score;
+  const bullpenEdge = model.homeBullpen.score - model.awayBullpen.score;
+  const factors = [
+    `${model.awayName} ${scorePercent(model.awayPitcherMetrics.score)} vs ${model.homeName} ${scorePercent(model.homePitcherMetrics.score)} en abridores`,
+    `Ofensiva: ${model.awayName} ${scorePercent(model.awayOffense.score)}, ${model.homeName} ${scorePercent(model.homeOffense.score)}`,
+    `Forma reciente: ${model.awayName} ${model.awayForm.runsFor5.toFixed(1)} RF/G y ${model.awayForm.runsAllowed5.toFixed(1)} RA/G; ${model.homeName} ${model.homeForm.runsFor5.toFixed(1)} RF/G y ${model.homeForm.runsAllowed5.toFixed(1)} RA/G`,
+    `Bullpen: ${model.awayName} ERA aprox ${model.awayBullpen.era.toFixed(2)} y fatiga ${scorePercent(model.awayBullpen.fatigue)}; ${model.homeName} ERA aprox ${model.homeBullpen.era.toFixed(2)} y fatiga ${scorePercent(model.homeBullpen.fatigue)}`,
+  ];
+
+  const leaders = [
+    [Math.abs(pitcherEdge), pitcherEdge >= 0 ? `${model.homeName} llega mejor en abridor` : `${model.awayName} llega mejor en abridor`],
+    [Math.abs(offenseEdge), offenseEdge >= 0 ? `${model.homeName} tiene mejor perfil ofensivo` : `${model.awayName} tiene mejor perfil ofensivo`],
+    [Math.abs(formEdge), formEdge >= 0 ? `${model.homeName} llega con mejor forma reciente` : `${model.awayName} llega con mejor forma reciente`],
+    [Math.abs(bullpenEdge), bullpenEdge >= 0 ? `${model.homeName} tiene ventaja de bullpen` : `${model.awayName} tiene ventaja de bullpen`],
+  ]
+    .sort((a, b) => b[0] - a[0])
+    .filter(([edge]) => edge >= 0.04)
+    .slice(0, 2)
+    .map(([, text]) => text);
+
+  if (leaders.length) factors.unshift(`Factores principales: ${leaders.join("; ")}.`);
+  if (model.odds.overUnder) factors.push(`Total proyectado ${model.totalRuns.toFixed(1)} contra linea ESPN ${model.odds.overUnder}.`);
+  return factors;
+}
+
+function weightedTeamScore(scores, weights) {
+  return (
+    numberOr(scores.pitcher?.score, 0.5) * weights.pitcher +
+    numberOr(scores.offense?.score, 0.5) * weights.offense +
+    numberOr(scores.form?.score, 0.5) * weights.form +
+    numberOr(scores.bullpen?.score, 0.5) * weights.bullpen +
+    numberOr(scores.localia?.score, 0.5) * weights.localia +
+    numberOr(scores.matchup?.score, 0.5) * weights.matchup
+  );
+}
+
+function normalizeHigher(value, low, high) {
+  return clamp((numberOr(value, (low + high) / 2) - low) / (high - low), 0, 1);
+}
+
+function normalizeLower(value, low, high) {
+  return 1 - normalizeHigher(value, low, high);
+}
+
+function scoreLabel(score) {
+  if (score >= 0.64) return "Fuerte";
+  if (score <= 0.38) return "Debil";
+  return "Neutro";
+}
+
+function scorePercent(score) {
+  return `${Math.round(clamp(numberOr(score, 0.5), 0, 1) * 100)}%`;
 }
 
 function pythagoreanWinProb(favoriteRuns, underdogRuns) {
@@ -949,6 +1589,11 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function numberOr(value, fallbackValue) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallbackValue;
+}
+
 function ratePerNine(value, innings) {
   return innings > 0 ? (value * 9) / innings : 0;
 }
@@ -970,4 +1615,29 @@ function clamp(value, min, max) {
 
 function round1(value) {
   return Math.round(value * 10) / 10;
+}
+
+function sum(values) {
+  return values.reduce((total, value) => total + numberOr(value, 0), 0);
+}
+
+function average(values) {
+  const clean = values.map((value) => numberOr(value, NaN)).filter(Number.isFinite);
+  return clean.length ? sum(clean) / clean.length : 0;
+}
+
+function addDays(dateValue, days) {
+  const date = new Date(`${dateValue}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return toDateInputValue(date);
+}
+
+function estimateHitsFromRuns(runs) {
+  return clamp(LEAGUE.hitsPerGame + (numberOr(runs, LEAGUE.runsPerGame) - LEAGUE.runsPerGame) * 0.72, 4, 15);
+}
+
+function locationWinRate(games, isHome) {
+  const filtered = games.filter((game) => game.isHome === isHome);
+  if (!filtered.length) return 0.5;
+  return filtered.filter((game) => game.win).length / filtered.length;
 }

@@ -20,6 +20,26 @@
         },
       };
     </script>
+    <style>
+      html, body {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+      }
+      img {
+        -webkit-font-smoothing: antialiased;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+      }
+      .img-crisp {
+        image-rendering: crisp-edges;
+        -webkit-font-smoothing: antialiased;
+      }
+      .img-smooth {
+        image-rendering: smooth;
+        image-rendering: -webkit-optimize-contrast;
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-[#f5f7fb] text-slate-950 antialiased">
     <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">

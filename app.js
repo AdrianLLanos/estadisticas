@@ -1115,7 +1115,7 @@ function teamPitcherSide(align, pitcher, teamName) {
 
 function pitcherHeadshot(pitcher, align) {
   if (pitcher?.headshot) {
-    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 bg-white object-cover ${align === "left" ? "-mr-1" : "-ml-1"}" />`;
+    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 bg-white object-cover img-smooth ${align === "left" ? "-mr-1" : "-ml-1"}" loading="lazy" />`;
   }
 
   return `
@@ -1152,7 +1152,7 @@ function pitcherTableRow(pitcher) {
 
 function teamLogo(pitcher, teamName) {
   if (pitcher?.teamLogo) {
-    return `<img src="${escapeHtml(pitcher.teamLogo)}" alt="${escapeHtml(teamName)}" class="h-5 w-5 object-contain" />`;
+    return `<img src="${escapeHtml(pitcher.teamLogo)}" alt="${escapeHtml(teamName)}" class="h-5 w-5 object-contain img-crisp" loading="lazy" />`;
   }
 
   return `<span class="flex h-5 w-5 items-center justify-center text-xs font-black text-slate-700">${escapeHtml(teamAbbrev(teamName).slice(0, 1))}</span>`;
@@ -1458,7 +1458,7 @@ function pitcherModelLine(pitcher) {
 
 function pitcherImage(pitcher) {
   if (pitcher.headshot) {
-    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 bg-white object-cover" />`;
+    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 bg-white object-cover img-smooth" loading="lazy" />`;
   }
 
   return `

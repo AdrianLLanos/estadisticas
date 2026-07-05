@@ -148,6 +148,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awayName = shortName(awayTeam.name);
   const homeName = shortName(homeTeam.name);
 
+  {
   const odds = extractEspnOdds(espnEvent);
   const weather = extractEspnWeather(espnEvent);
   const espnRecords = extractEspnTeamRecords(espnEvent);
@@ -224,7 +225,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     homeForm,
     awayBullpen,
     homeBullpen,
-    weather,
     odds,
     totalRuns,
   });
@@ -277,7 +277,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
       homeBullpen,
       awayMatchup,
       homeMatchup,
-      weather,
     },
     rows: [
       {
@@ -327,6 +326,100 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         estimate: `${totalRuns.toFixed(1)} carreras`,
         confidence: "Referencia",
         base: explanation.slice(1, 3).join(" "),
+      },
+    ],
+  };
+
+  }
+
+  const awayRuns = expectedRuns(awayStats, homeStats, homePitcher);
+  const homeRuns = expectedRuns(homeStats, awayStats, awayPitcher);
+  const awayHits = expectedHits(awayStats, homeStats, homePitcher);
+  const homeHits = expectedHits(homeStats, awayStats, awayPitcher);
+  const totalRuns = round1(awayRuns + homeRuns);
+  const totalHits = round1(awayHits + homeHits);
+  const diff = round1(homeRuns - awayRuns);
+  const favorite = diff >= 0 ? homeName : awayName;
+  const underdog = diff >= 0 ? awayName : homeName;
+  const favoriteRuns = diff >= 0 ? homeRuns : awayRuns;
+  const underdogRuns = diff >= 0 ? awayRuns : homeRuns;
+  const winProbability = pythagoreanWinProb(favoriteRuns, underdogRuns);
+  const odds = extractEspnOdds(espnEvent);
+  const totalLean = odds.overUnder
+    ? totalRuns >= odds.overUnder + 0.4
+      ? `Over ${odds.overUnder}`
+      : totalRuns <= odds.overUnder - 0.4
+        ? `Under ${odds.overUnder}`
+        : `Cerca de ${odds.overUnder}`
+    : totalRuns >= 8.9
+      ? "Over estimado"
+      : totalRuns <= 7.4
+        ? "Under estimado"
+        : "Total medio";
+
+  const runLinePick = Math.abs(diff) >= 1.35 ? `${favorite} -1.5` : `${underdog} +1.5`;
+  const confidence = confidenceFromEdge(Math.abs(diff), winProbability);
+  const totalConfidence = odds.overUnder ? confidenceFromTotalEdge(Math.abs(totalRuns - odds.overUnder)) : "Media";
+
+  return {
+    game,
+    awayName,
+    homeName,
+    awayRuns: round1(awayRuns),
+    homeRuns: round1(homeRuns),
+    awayHits: round1(awayHits),
+    homeHits: round1(homeHits),
+    totalRuns,
+    totalHits,
+    diff,
+    favorite,
+    winProbability,
+    runLinePick,
+    totalLean,
+    confidence,
+    totalConfidence,
+    odds,
+    pitchers: {
+      away: awayPitcher,
+      home: homePitcher,
+    },
+    rows: [
+      {
+        market: "Ganador",
+        pick: favorite,
+        estimate: `${Math.round(winProbability * 100)}%`,
+        confidence,
+        base: `Carreras: ${awayName} ${round1(awayRuns)} - ${homeName} ${round1(homeRuns)}`,
+      },
+      {
+        market: "Total carreras",
+        pick: totalLean,
+        estimate: totalRuns.toFixed(1),
+        confidence: totalConfidence,
+        base: odds.overUnder
+          ? `Línea ESPN: ${odds.overUnder}; modelo usa OPS/OBP/SLG, HR, BB/K, ERA, WHIP, K/9, BB/9 y HR/9`
+          : "OPS/OBP/SLG, HR, BB/K, ERA, WHIP, K/9, BB/9 y HR/9",
+      },
+      {
+        market: "Handicap",
+        pick: runLinePick,
+        estimate: `${favorite} +${round1(Math.abs(diff))}`,
+        confidence: Math.abs(diff) >= 1.35 ? confidence : "Baja",
+        base: "Diferencia proyectada de carreras",
+      },
+      {
+        market: "Hits totales",
+        pick: totalHits >= 16.7 ? "Over hits" : totalHits <= 14.2 ? "Under hits" : "Rango medio",
+        estimate: totalHits.toFixed(1),
+        confidence: totalHits >= 17.6 || totalHits <= 13.4 ? "Media" : "Baja",
+        base: `${awayName} ${round1(awayHits)} H, ${homeName} ${round1(homeHits)} H`,
+      },
+      {
+        market: "Marcador estimado",
+        pick: `${awayName} ${Math.max(1, Math.round(awayRuns))} - ${homeName} ${Math.max(1, Math.round(homeRuns))}`,
+        estimate: `${totalRuns.toFixed(1)} carreras`,
+        confidence: "Referencia",
+        base: pitcherBase(game, awayPitcher, homePitcher),
       },
     ],
   };
@@ -1211,59 +1304,25 @@ function extractEspnOdds(event) {
 function extractEspnWeather(event) {
   const weather = event?.weather;
   if (!weather) return null;
-
-  const temperature = number(weather.temperature);
-  const highTemperature = number(weather.highTemperature || weather.maxTemperature);
-  const lowTemperature = number(weather.lowTemperature);
-  const description = weather.displayValue || weather.text || weather.shortPhrase || weather.longPhrase || "Clima disponible";
-  const windSpeed = number(weather.windSpeed || weather.wind?.speed);
-  const windDirection = weather.wind?.direction || weather.wind?.dir || "";
-  const humidity = number(weather.humidity);
-
   return {
-    temperature,
-    highTemperature,
-    lowTemperature,
-    description,
-    windSpeed,
-    windDirection,
-    humidity,
+    temperature: number(weather.temperature),
+    highTemperature: number(weather.highTemperature),
+    description: weather.displayValue || weather.text || "Clima disponible",
     link: weather.link?.href || "",
   };
 }
 
 function calcularImpactoClima(weather) {
   if (!weather) return 0;
-
-  let impact = 0;
   const description = String(weather.description || "").toLowerCase();
+  if (/rain|storm|thunder|snow|showers|drizzle/.test(description)) return -0.45;
+  if (/wind|breezy|blustery/.test(description)) return -0.18;
   const temp = number(weather.temperature);
-  const wind = number(weather.windSpeed);
-  const humidity = number(weather.humidity);
-
-  if (/rain|storm|thunder|snow|showers|drizzle|sleet|hail/.test(description)) {
-    impact -= 0.45;
-  }
-  if (/wind|breezy|blustery/.test(description) || wind >= 25) {
-    impact -= 0.18;
-  } else if (wind >= 18) {
-    impact -= 0.1;
-  }
-  if (humidity >= 85 && temp >= 75) {
-    impact -= 0.08;
-  }
-
-  if (temp >= 95) {
-    impact += 0.35;
-  } else if (temp >= 90) {
-    impact += 0.18;
-  } else if (temp <= 32) {
-    impact -= 0.3;
-  } else if (temp <= 40) {
-    impact -= 0.15;
-  }
-
-  return Math.max(-0.65, Math.min(0.4, impact));
+  if (temp >= 95) return 0.35;
+  if (temp >= 90) return 0.18;
+  if (temp <= 35) return -0.25;
+  if (temp <= 40) return -0.12;
+  return 0;
 }
 
 function extractEspnTeamRecords(event) {

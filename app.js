@@ -476,33 +476,24 @@ function calcularOfensivaEquipo(team = {}) {
 }
 
 function calcularFormaReciente(context = {}) {
-  const last5 = context?.last5 || {};
   const last10 = context?.last10 || {};
   const metrics = {
-    games5: numberOr(last5.games, 0),
     games10: numberOr(last10.games, 0),
-    wins5: numberOr(last5.wins, 0),
     wins10: numberOr(last10.wins, 0),
-    runsFor5: fallback(last5.runsForPerGame, LEAGUE.runsPerGame),
-    runsAllowed5: fallback(last5.runsAllowedPerGame, LEAGUE.runsPerGame),
-    hits5: fallback(last5.hitsPerGame, LEAGUE.hitsPerGame),
     runsFor10: fallback(last10.runsForPerGame, LEAGUE.runsPerGame),
     runsAllowed10: fallback(last10.runsAllowedPerGame, LEAGUE.runsPerGame),
+    hits10: fallback(last10.hitsPerGame, LEAGUE.hitsPerGame),
     overRate: Number.isFinite(last10.overRate) ? last10.overRate : 0.5,
   };
-  const winRate5 = metrics.games5 ? metrics.wins5 / metrics.games5 : 0.5;
   const winRate10 = metrics.games10 ? metrics.wins10 / metrics.games10 : 0.5;
-  const runDiff5 = metrics.runsFor5 - metrics.runsAllowed5;
   const runDiff10 = metrics.runsFor10 - metrics.runsAllowed10;
   const score =
-    normalizeHigher(winRate5, 0.2, 0.8) * 0.24 +
-    normalizeHigher(winRate10, 0.25, 0.75) * 0.16 +
-    normalizeHigher(runDiff5, -2.2, 2.2) * 0.24 +
-    normalizeHigher(runDiff10, -1.7, 1.7) * 0.17 +
-    normalizeHigher(metrics.runsFor5, 2.8, 6.2) * 0.11 +
-    normalizeLower(metrics.runsAllowed5, 2.8, 6.2) * 0.08;
+    normalizeHigher(winRate10, 0.25, 0.75) * 0.32 +
+    normalizeHigher(runDiff10, -1.7, 1.7) * 0.31 +
+    normalizeHigher(metrics.runsFor10, 2.8, 6.2) * 0.2 +
+    normalizeLower(metrics.runsAllowed10, 2.8, 6.2) * 0.17;
 
-  return { ...metrics, winRate5, winRate10, runDiff5, runDiff10, score: clamp(score, 0, 1), label: scoreLabel(score) };
+  return { ...metrics, winRate10, runDiff10, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
 
 function calcularBullpenAproximado(bullpen = {}) {
@@ -564,8 +555,7 @@ function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPi
     fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame) * 0.34 +
     fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame) * 0.22 +
     LEAGUE.runsPerGame * 0.14 +
-    fallback(recentForm?.runsFor5, LEAGUE.runsPerGame) * 0.1 +
-    fallback(recentForm?.runsFor10, LEAGUE.runsPerGame) * 0.07 +
+    fallback(recentForm?.runsFor10, LEAGUE.runsPerGame) * 0.17 +
     fallback(opponentPitcher?.era, LEAGUE.era) * 0.08 +
     fallback(opponentBullpen?.era, LEAGUE.era) * 0.05;
   const raw =
@@ -662,7 +652,6 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
     const roster = await getActivePitchers(teamId, probablePitcherId);
     const context = {
       games: parsedGames,
-      last5: aggregateRecentGames(parsedGames.slice(-5)),
       last10: aggregateRecentGames(parsedGames),
       bullpen: aggregateBullpenGames(bullpenGames, referenceDate, roster.relieversAvailable),
       homeWinRate: locationWinRate(parsedGames, true),
@@ -673,7 +662,6 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
   } catch {
     const neutral = {
       games: [],
-      last5: aggregateRecentGames([]),
       last10: aggregateRecentGames([]),
       bullpen: aggregateBullpenGames([], referenceDate, 7),
       homeWinRate: 0.5,
@@ -813,7 +801,7 @@ function summarizePitcherRecentStarts(splits) {
   const starts = (splits || [])
     .filter((split) => number(split.stat?.gamesStarted) > 0 || inningsToNumber(split.stat?.inningsPitched) >= 3)
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-    .slice(0, 5);
+    .slice(0, 10);
 
   if (!starts.length) {
     return {
@@ -1395,7 +1383,7 @@ function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm) {
     fallback(team?.hitsPerGame, LEAGUE.hitsPerGame) * 0.44 +
     fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame) * 0.2 +
     LEAGUE.hitsPerGame * 0.13 +
-    fallback(recentForm?.hits5, LEAGUE.hitsPerGame) * 0.1 +
+    fallback(recentForm?.hits10, LEAGUE.hitsPerGame) * 0.1 +
     (fallback(opponentPitcher?.whip, LEAGUE.whip) - LEAGUE.whip) * 1.35 +
     (fallback(opponentPitcher?.hitsPerNine, LEAGUE.pitcherHits9) - LEAGUE.pitcherHits9) * 0.13 -
     (fallback(opponentPitcher?.k9, LEAGUE.pitcherK9) - LEAGUE.pitcherK9) * 0.08 +
@@ -1412,7 +1400,7 @@ function buildExplanation(model) {
   const factors = [
     `${model.awayName} ${scorePercent(model.awayPitcherMetrics.score)} vs ${model.homeName} ${scorePercent(model.homePitcherMetrics.score)} en abridores`,
     `Ofensiva: ${model.awayName} ${scorePercent(model.awayOffense.score)}, ${model.homeName} ${scorePercent(model.homeOffense.score)}`,
-    `Forma reciente: ${model.awayName} ${model.awayForm.runsFor5.toFixed(1)} RF/G y ${model.awayForm.runsAllowed5.toFixed(1)} RA/G; ${model.homeName} ${model.homeForm.runsFor5.toFixed(1)} RF/G y ${model.homeForm.runsAllowed5.toFixed(1)} RA/G`,
+    `Forma reciente ultimos 10: ${model.awayName} ${model.awayForm.runsFor10.toFixed(1)} RF/G y ${model.awayForm.runsAllowed10.toFixed(1)} RA/G; ${model.homeName} ${model.homeForm.runsFor10.toFixed(1)} RF/G y ${model.homeForm.runsAllowed10.toFixed(1)} RA/G`,
     `Bullpen: ${model.awayName} ERA aprox ${model.awayBullpen.era.toFixed(2)} y fatiga ${scorePercent(model.awayBullpen.fatigue)}; ${model.homeName} ERA aprox ${model.homeBullpen.era.toFixed(2)} y fatiga ${scorePercent(model.homeBullpen.fatigue)}`,
   ];
 

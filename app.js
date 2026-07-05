@@ -194,6 +194,25 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm);
   const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm);
   const totalHits = calcularHitsTotales(awayStats, homeStats, homePitcherMetrics, awayPitcherMetrics, awayForm, homeForm);
+
+  // Run Poisson solver for hits (16.5 benchmark)
+  const hitsPoisson = calcularHitsPoisson(awayHits, homeHits, 16.5);
+  let hitsLean = "";
+  let hitsProb = 0;
+  if (hitsPoisson.overProb >= 0.525) {
+    hitsLean = "Over 16.5 hits";
+    hitsProb = hitsPoisson.overProb;
+  } else if (hitsPoisson.underProb >= 0.525) {
+    hitsLean = "Under 16.5 hits";
+    hitsProb = hitsPoisson.underProb;
+  } else {
+    hitsLean = "Total hits medio";
+    hitsProb = Math.max(hitsPoisson.overProb, hitsPoisson.underProb);
+  }
+
+  let hitsConfidence = "Baja";
+  if (hitsProb >= 0.58) hitsConfidence = "Alta";
+  else if (hitsProb >= 0.53) hitsConfidence = "Media";
   const probability = calcularProbabilidadGanador({
     awayRuns,
     homeRuns,
@@ -204,15 +223,72 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const favorite = probability.favorite === "home" ? homeName : awayName;
   const underdog = probability.favorite === "home" ? awayName : homeName;
   const winProbability = probability.value;
-  const totalLean = recomendacionTotal(totalRuns, odds.overUnder);
-  const runLinePick = calcularHandicap({ diff, favorite, underdog });
-  const confidence = calcularConfianza({
-    diff: Math.abs(diff),
-    winProbability,
-    awayScore: probability.awayComposite,
-    homeScore: probability.homeComposite,
-  });
-  const totalConfidence = odds.overUnder ? confidenceFromTotalEdge(Math.abs(totalRuns - odds.overUnder)) : "Media";
+
+  // Run Poisson solver using the sportsbook line or standard 8.5
+  const targetLine = odds.overUnder || 8.5;
+  const finalPoisson = calcularMatrizPoisson(awayRuns, homeRuns, targetLine);
+
+  // Over/Under lean and probability
+  let totalLean = "";
+  let totalProb = 0;
+  if (odds.overUnder) {
+    if (finalPoisson.overProb >= 0.525) {
+      totalLean = `Over ${targetLine}`;
+      totalProb = finalPoisson.overProb;
+    } else if (finalPoisson.underProb >= 0.525) {
+      totalLean = `Under ${targetLine}`;
+      totalProb = finalPoisson.underProb;
+    } else {
+      totalLean = `Cerca de ${targetLine}`;
+      totalProb = Math.max(finalPoisson.overProb, finalPoisson.underProb);
+    }
+  } else {
+    if (totalRuns >= 8.9) {
+      totalLean = "Over estimado";
+      totalProb = finalPoisson.overProb;
+    } else if (totalRuns <= 7.4) {
+      totalLean = "Under estimado";
+      totalProb = finalPoisson.underProb;
+    } else {
+      totalLean = "Total medio";
+      totalProb = Math.max(finalPoisson.overProb, finalPoisson.underProb);
+    }
+  }
+
+  // Run Line handicap pick and probability
+  let runLinePick = "";
+  let runLineProb = 0;
+  if (probability.favorite === "home") {
+    if (finalPoisson.homeMinus1_5Prob >= 0.46) {
+      runLinePick = `${homeName} -1.5`;
+      runLineProb = finalPoisson.homeMinus1_5Prob;
+    } else {
+      runLinePick = `${awayName} +1.5`;
+      runLineProb = 1 - finalPoisson.homeMinus1_5Prob;
+    }
+  } else {
+    if (finalPoisson.awayMinus1_5Prob >= 0.46) {
+      runLinePick = `${awayName} -1.5`;
+      runLineProb = finalPoisson.awayMinus1_5Prob;
+    } else {
+      runLinePick = `${homeName} +1.5`;
+      runLineProb = 1 - finalPoisson.awayMinus1_5Prob;
+    }
+  }
+
+  // Confidence calculations based on Poisson/Sabermetric probabilities
+  let confidence = "Baja";
+  if (winProbability >= 0.62) confidence = "Alta";
+  else if (winProbability >= 0.55) confidence = "Media";
+
+  let totalConfidence = "Baja";
+  if (totalProb >= 0.58) totalConfidence = "Alta";
+  else if (totalProb >= 0.53) totalConfidence = "Media";
+
+  let handicapConfidence = "Baja";
+  if (runLineProb >= 0.58) handicapConfidence = "Alta";
+  else if (runLineProb >= 0.53) handicapConfidence = "Media";
+
   const explanation = buildExplanation({
     awayName,
     homeName,
@@ -290,25 +366,25 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
       {
         market: "Total carreras",
         pick: totalLean,
-        estimate: totalRuns.toFixed(1),
+        estimate: `${totalRuns.toFixed(1)} runs`,
         confidence: totalConfidence,
         base: odds.overUnder
-          ? `Linea ESPN: ${odds.overUnder}; modelo pondera pitcher, ofensiva, forma, bullpen, localia y matchup`
-          : "Modelo pondera pitcher, ofensiva, forma, bullpen, localia y matchup",
+          ? `Línea de ESPN: ${odds.overUnder} (Prob del pick: ${Math.round(totalProb * 100)}% por Poisson)`
+          : `Total estimado: ${totalRuns.toFixed(1)} (Prob del pick: ${Math.round(totalProb * 100)}% por Poisson)`,
       },
       {
         market: "Handicap",
         pick: runLinePick,
-        estimate: `${favorite} +${round1(Math.abs(diff))}`,
-        confidence: Math.abs(diff) >= 1.25 ? confidence : "Baja",
-        base: "Diferencia proyectada de carreras con ventaja del modelo",
+        estimate: `Prob: ${Math.round(runLineProb * 100)}%`,
+        confidence: handicapConfidence,
+        base: `Diferencia proyectada de carreras: ${diff > 0 ? '+' : ''}${diff}. Calculado vía Poisson.`,
       },
       {
         market: "Hits totales",
-        pick: totalHits >= 16.7 ? "Over hits" : totalHits <= 14.2 ? "Under hits" : "Rango medio",
-        estimate: totalHits.toFixed(1),
-        confidence: totalHits >= 17.6 || totalHits <= 13.4 ? "Media" : "Baja",
-        base: `${awayName} ${round1(awayHits)} H, ${homeName} ${round1(homeHits)} H`,
+        pick: hitsLean,
+        estimate: `${totalHits.toFixed(1)} H`,
+        confidence: hitsConfidence,
+        base: `${awayName} ${round1(awayHits)} H, ${homeName} ${round1(homeHits)} H (Prob del pick: ${Math.round(hitsProb * 100)}% por Poisson contra línea 16.5)`,
       },
       ...(weather
         ? [
@@ -474,32 +550,56 @@ function calcularMatchup(offense, opponentPitcher, opponentBullpen, recentForm) 
 }
 
 function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPitcher, opponentBullpen, recentForm, localia, matchup, isHome }) {
-  const base =
-    fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame) * 0.34 +
-    fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame) * 0.22 +
-    LEAGUE.runsPerGame * 0.14 +
-    fallback(recentForm?.runsFor10, LEAGUE.runsPerGame) * 0.17 +
-    fallback(opponentPitcher?.era, LEAGUE.era) * 0.08 +
-    fallback(opponentBullpen?.era, LEAGUE.era) * 0.05;
-  const raw =
-    base +
-    (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 1.45 +
-    (numberOr(offense?.score, 0.5) - 0.5) * 1.1 +
-    (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.76 +
-    (numberOr(recentForm?.score, 0.5) - 0.5) * 0.64 +
-    (numberOr(localia?.score, isHome ? 0.53 : 0.47) - 0.5) * 0.62 +
-    (numberOr(matchup?.score, 0.5) - 0.5) * 0.72;
+  const teamOffenseRPG = fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame);
+  const opponentDefenseRPG = fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame);
+  
+  // Base expectation combining team offense and opponent defense relative to league average
+  const baseExpectedRuns = (teamOffenseRPG * opponentDefenseRPG) / LEAGUE.runsPerGame;
 
-  return clamp(raw, 2.1, 7.6);
+  // Pitcher factor: starting pitcher ERA relative to league average and their score
+  const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
+  const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.30;
+  const pitcherFactor = (pitcherEraRatio * 0.6 + pitcherScoreFactor * 0.4);
+
+  // Bullpen factor: bullpen ERA relative to league average and its score
+  const bullpenEraRatio = fallback(opponentBullpen?.era, LEAGUE.era) / LEAGUE.era;
+  const bullpenScoreFactor = 1.0 + (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.20;
+  const bullpenFactor = (bullpenEraRatio * 0.5 + bullpenScoreFactor * 0.5);
+
+  // Recent form factor: recent runs scored and team score relative to average
+  const recentRunsRPG = fallback(recentForm?.runsFor10, LEAGUE.runsPerGame);
+  const formFactor = 1.0 + (recentRunsRPG / LEAGUE.runsPerGame - 1.0) * 0.25 + (numberOr(recentForm?.score, 0.5) - 0.5) * 0.20;
+
+  // Matchup factor
+  const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.20;
+
+  // Home/Away field advantage factor
+  const localiaFactor = localia?.score ? localia.score / (isHome ? 0.53 : 0.47) : 1.0;
+
+  // Sabermetric multiplicative projection
+  let raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor * localiaFactor;
+
+  return clamp(raw, 2.0, 8.5);
 }
 
 function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScores }) {
   const weights = { pitcher: 0.3, offense: 0.25, form: 0.15, bullpen: 0.15, localia: 0.05, matchup: 0.1 };
   const awayComposite = weightedTeamScore(awayScores, weights);
   const homeComposite = weightedTeamScore(homeScores, weights);
-  const runEdge = clamp((homeRuns - awayRuns) / 4.5, -0.42, 0.42);
+  
+  // Calculate winning probability via Pythagenpat
+  const pythagenpatHomeProb = pythagoreanWinProb(awayRuns, homeRuns);
+  
+  // Calculate winning probability via Poisson distribution
+  const poissonResult = calcularMatrizPoisson(awayRuns, homeRuns, LEAGUE.totalRunsLine);
+  const poissonHomeProb = poissonResult.homeWinProb;
+
+  // Model index edge (traditional composite weight)
   const modelEdge = clamp((homeComposite - awayComposite) * 1.35, -0.25, 0.25);
-  const homeProb = clamp(0.5 + runEdge * 0.52 + modelEdge * 0.48, 0.28, 0.72);
+  const compositeHomeProb = clamp(0.5 + modelEdge, 0.25, 0.75);
+
+  // Consolidate the probabilities: 50% Poisson, 35% Pythagenpat, 15% Composite score
+  const homeProb = clamp(poissonHomeProb * 0.50 + pythagenpatHomeProb * 0.35 + compositeHomeProb * 0.15, 0.20, 0.80);
   const favorite = homeProb >= 0.5 ? "home" : "away";
 
   return {
@@ -508,6 +608,7 @@ function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScore
     homeProb,
     awayComposite,
     homeComposite,
+    poissonResult
   };
 }
 
@@ -1360,17 +1461,32 @@ function recomendacionTotal(totalRuns, line) {
 }
 
 function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm) {
-  const raw =
-    fallback(team?.hitsPerGame, LEAGUE.hitsPerGame) * 0.44 +
-    fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame) * 0.2 +
-    LEAGUE.hitsPerGame * 0.13 +
-    fallback(recentForm?.hits10, LEAGUE.hitsPerGame) * 0.1 +
-    (fallback(opponentPitcher?.whip, LEAGUE.whip) - LEAGUE.whip) * 1.35 +
-    (fallback(opponentPitcher?.hitsPerNine, LEAGUE.pitcherHits9) - LEAGUE.pitcherHits9) * 0.13 -
-    (fallback(opponentPitcher?.k9, LEAGUE.pitcherK9) - LEAGUE.pitcherK9) * 0.08 +
-    (fallback(team?.battingAverage, LEAGUE.battingAverage) - LEAGUE.battingAverage) * 9;
+  const teamHitsRPG = fallback(team?.hitsPerGame, LEAGUE.hitsPerGame);
+  const opponentHitsAllowedRPG = fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame);
+  
+  // Base hits expectation combining team offense and opponent defense relative to league average
+  const baseExpectedHits = (teamHitsRPG * opponentHitsAllowedRPG) / LEAGUE.hitsPerGame;
 
-  return clamp(raw, 5.1, 11.8);
+  // Pitcher hits factor: based on H/9, WHIP, and K/9 relative to league averages
+  const pitcherH9Ratio = fallback(opponentPitcher?.hitsPerNine, LEAGUE.pitcherHits9) / LEAGUE.pitcherHits9;
+  const pitcherWhipRatio = fallback(opponentPitcher?.whip, LEAGUE.whip) / LEAGUE.whip;
+  const pitcherK9Diff = fallback(opponentPitcher?.k9, LEAGUE.pitcherK9) - LEAGUE.pitcherK9;
+  const pitcherK9Factor = 1.0 - pitcherK9Diff * 0.012; // High K/9 reduces contact and hits
+  
+  const pitcherFactor = (pitcherH9Ratio * 0.50 + pitcherWhipRatio * 0.35 + pitcherK9Factor * 0.15);
+
+  // Recent form factor
+  const recentHitsRPG = fallback(recentForm?.hits10, LEAGUE.hitsPerGame);
+  const formFactor = 1.0 + (recentHitsRPG / LEAGUE.hitsPerGame - 1.0) * 0.30;
+
+  // Batting average factor
+  const teamBA = fallback(team?.battingAverage, LEAGUE.battingAverage);
+  const baFactor = teamBA / LEAGUE.battingAverage;
+
+  // Sabermetric multiplicative projection
+  let raw = baseExpectedHits * pitcherFactor * formFactor * baFactor;
+
+  return clamp(raw, 5.0, 12.0);
 }
 
 function buildExplanation(model) {
@@ -1433,11 +1549,101 @@ function scorePercent(score) {
   return `${Math.round(clamp(numberOr(score, 0.5), 0, 1) * 100)}%`;
 }
 
-function pythagoreanWinProb(favoriteRuns, underdogRuns) {
-  const exponent = 1.83;
-  const fav = Math.pow(Math.max(favoriteRuns, 0.1), exponent);
-  const dog = Math.pow(Math.max(underdogRuns, 0.1), exponent);
-  return clamp(fav / (fav + dog), 0.5, 0.72);
+function factorial(n) {
+  if (n <= 1) return 1;
+  let res = 1;
+  for (let i = 2; i <= n; i++) res *= i;
+  return res;
+}
+
+function poissonProbability(lambda, k) {
+  return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
+}
+
+function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine) {
+  let homeWinProb = 0;
+  let awayWinProb = 0;
+  let overProb = 0;
+  let underProb = 0;
+  let homeMinus1_5Prob = 0;
+  let awayMinus1_5Prob = 0;
+
+  const MAX_RUNS = 18;
+
+  for (let a = 0; a <= MAX_RUNS; a++) {
+    const pAway = poissonProbability(awayRuns, a);
+    for (let h = 0; h <= MAX_RUNS; h++) {
+      const pHome = poissonProbability(homeRuns, h);
+      const jointProb = pAway * pHome;
+
+      if (h > a) {
+        homeWinProb += jointProb;
+      } else if (a > h) {
+        awayWinProb += jointProb;
+      } else {
+        homeWinProb += jointProb * 0.5;
+        awayWinProb += jointProb * 0.5;
+      }
+
+      const totalRuns = a + h;
+      const targetLine = overUnderLine || 8.5;
+      if (totalRuns > targetLine) {
+        overProb += jointProb;
+      } else if (totalRuns < targetLine) {
+        underProb += jointProb;
+      } else {
+        overProb += jointProb * 0.5;
+        underProb += jointProb * 0.5;
+      }
+
+      if (h - a >= 1.5) homeMinus1_5Prob += jointProb;
+      if (a - h >= 1.5) awayMinus1_5Prob += jointProb;
+    }
+  }
+
+  return {
+    homeWinProb,
+    awayWinProb,
+    overProb,
+    underProb,
+    homeMinus1_5Prob,
+    awayMinus1_5Prob
+  };
+}
+
+function pythagoreanWinProb(awayRuns, homeRuns) {
+  const totalRuns = awayRuns + homeRuns;
+  if (totalRuns === 0) return 0.5;
+  const exponent = Math.pow(totalRuns, 0.287);
+  const homePower = Math.pow(homeRuns, exponent);
+  const awayPower = Math.pow(awayRuns, exponent);
+  return clamp(homePower / (homePower + awayPower), 0.1, 0.9);
+}
+
+function calcularHitsPoisson(awayHits, homeHits, line) {
+  let overProb = 0;
+  let underProb = 0;
+  const targetLine = line || 16.5;
+  const MAX_HITS = 25;
+
+  for (let a = 0; a <= MAX_HITS; a++) {
+    const pAway = poissonProbability(awayHits, a);
+    for (let h = 0; h <= MAX_HITS; h++) {
+      const pHome = poissonProbability(homeHits, h);
+      const jointProb = pAway * pHome;
+
+      const total = a + h;
+      if (total > targetLine) {
+        overProb += jointProb;
+      } else if (total < targetLine) {
+        underProb += jointProb;
+      } else {
+        overProb += jointProb * 0.5;
+        underProb += jointProb * 0.5;
+      }
+    }
+  }
+  return { overProb, underProb };
 }
 
 function pitcherBase(game, awayPitcher, homePitcher) {

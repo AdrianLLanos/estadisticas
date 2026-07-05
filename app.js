@@ -172,6 +172,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     opponentPitcher: homePitcherMetrics,
     opponentBullpen: homeBullpen,
     recentForm: awayForm,
+    opponentRecentForm: homeForm,
     localia: awayLocalia,
     matchup: awayMatchup,
     isHome: false,
@@ -183,6 +184,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     opponentPitcher: awayPitcherMetrics,
     opponentBullpen: awayBullpen,
     recentForm: homeForm,
+    opponentRecentForm: awayForm,
     localia: homeLocalia,
     matchup: homeMatchup,
     isHome: true,
@@ -191,8 +193,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awayRuns = awayRunsBase + weatherAdjustment / 2;
   const homeRuns = homeRunsBase + weatherAdjustment / 2;
   const totalRuns = calcularTotalCarreras(awayRuns, homeRuns);
-  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm);
-  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm);
+  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm, homeForm);
+  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm, awayForm);
   const totalHits = calcularHitsTotales(awayStats, homeStats, homePitcherMetrics, awayPitcherMetrics, awayForm, homeForm);
 
   // Run Poisson solver for hits (16.5 benchmark)
@@ -482,6 +484,7 @@ function calcularFormaReciente(context = {}) {
     runsFor10: fallback(last10.runsForPerGame, LEAGUE.runsPerGame),
     runsAllowed10: fallback(last10.runsAllowedPerGame, LEAGUE.runsPerGame),
     hits10: fallback(last10.hitsPerGame, LEAGUE.hitsPerGame),
+    hitsAllowed10: fallback(last10.hitsAllowedPerGame, LEAGUE.hitsPerGame),
     overRate: Number.isFinite(last10.overRate) ? last10.overRate : 0.5,
   };
   const winRate10 = metrics.games10 ? metrics.wins10 / metrics.games10 : 0.5;
@@ -549,9 +552,16 @@ function calcularMatchup(offense, opponentPitcher, opponentBullpen, recentForm) 
   return { score: clamp(score, 0, 1), pitcherWeakness, bullpenWeakness, label: scoreLabel(score) };
 }
 
-function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPitcher, opponentBullpen, recentForm, localia, matchup, isHome }) {
-  const teamOffenseRPG = fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame);
-  const opponentDefenseRPG = fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame);
+function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPitcher, opponentBullpen, recentForm, opponentRecentForm, localia, matchup, isHome }) {
+  const seasonOffense = fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame);
+  const recentOffense = fallback(recentForm?.runsFor10, LEAGUE.runsPerGame);
+  // 75% weight on recent 10 games, 25% weight on season averages
+  const teamOffenseRPG = recentOffense * 0.75 + seasonOffense * 0.25;
+
+  const seasonDefense = fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame);
+  const recentDefense = fallback(opponentRecentForm?.runsAllowed10, LEAGUE.runsAllowedPerGame);
+  // 75% weight on recent 10 games, 25% weight on season averages
+  const opponentDefenseRPG = recentDefense * 0.75 + seasonDefense * 0.25;
   
   // Base expectation combining team offense and opponent defense relative to league average
   const baseExpectedRuns = (teamOffenseRPG * opponentDefenseRPG) / LEAGUE.runsPerGame;
@@ -566,9 +576,8 @@ function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPi
   const bullpenScoreFactor = 1.0 + (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.20;
   const bullpenFactor = (bullpenEraRatio * 0.5 + bullpenScoreFactor * 0.5);
 
-  // Recent form factor: recent runs scored and team score relative to average
-  const recentRunsRPG = fallback(recentForm?.runsFor10, LEAGUE.runsPerGame);
-  const formFactor = 1.0 + (recentRunsRPG / LEAGUE.runsPerGame - 1.0) * 0.25 + (numberOr(recentForm?.score, 0.5) - 0.5) * 0.20;
+  // Recent form factor (residual trend)
+  const formFactor = 1.0 + (numberOr(recentForm?.score, 0.5) - 0.5) * 0.20;
 
   // Matchup factor
   const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.20;
@@ -621,8 +630,8 @@ function calcularHandicap({ diff, favorite, underdog }) {
 }
 
 function calcularHitsTotales(awayStats, homeStats, homePitcher, awayPitcher, awayForm, homeForm) {
-  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcher, awayForm);
-  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcher, homeForm);
+  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcher, awayForm, homeForm);
+  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcher, homeForm, awayForm);
   return round1(clamp(awayHits + homeHits, 11.5, 22.5));
 }
 
@@ -783,6 +792,7 @@ function aggregateRecentGames(games) {
       runsForPerGame: LEAGUE.runsPerGame,
       runsAllowedPerGame: LEAGUE.runsPerGame,
       hitsPerGame: LEAGUE.hitsPerGame,
+      hitsAllowedPerGame: LEAGUE.hitsPerGame,
       overRate: 0.5,
     };
   }
@@ -794,6 +804,7 @@ function aggregateRecentGames(games) {
     runsForPerGame: average(games.map((game) => game.runsFor)),
     runsAllowedPerGame: average(games.map((game) => game.runsAllowed)),
     hitsPerGame: average(games.map((game) => game.hits)),
+    hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
     overRate: games.filter((game) => game.over).length / count,
   };
 }
@@ -1460,9 +1471,16 @@ function recomendacionTotal(totalRuns, line) {
   return "Total medio";
 }
 
-function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm) {
-  const teamHitsRPG = fallback(team?.hitsPerGame, LEAGUE.hitsPerGame);
-  const opponentHitsAllowedRPG = fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame);
+function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm, opponentRecentForm) {
+  const seasonHits = fallback(team?.hitsPerGame, LEAGUE.hitsPerGame);
+  const recentHits = fallback(recentForm?.hits10, LEAGUE.hitsPerGame);
+  // 75% weight on recent 10 games, 25% weight on season stats
+  const teamHitsRPG = recentHits * 0.75 + seasonHits * 0.25;
+
+  const seasonHitsAllowed = fallback(opponent?.hitsAllowedPerGame, LEAGUE.hitsPerGame);
+  const recentHitsAllowed = fallback(opponentRecentForm?.hitsAllowed10, LEAGUE.hitsPerGame);
+  // 75% weight on recent 10 games, 25% weight on season stats
+  const opponentHitsAllowedRPG = recentHitsAllowed * 0.75 + seasonHitsAllowed * 0.25;
   
   // Base hits expectation combining team offense and opponent defense relative to league average
   const baseExpectedHits = (teamHitsRPG * opponentHitsAllowedRPG) / LEAGUE.hitsPerGame;
@@ -1476,8 +1494,7 @@ function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm) {
   const pitcherFactor = (pitcherH9Ratio * 0.50 + pitcherWhipRatio * 0.35 + pitcherK9Factor * 0.15);
 
   // Recent form factor
-  const recentHitsRPG = fallback(recentForm?.hits10, LEAGUE.hitsPerGame);
-  const formFactor = 1.0 + (recentHitsRPG / LEAGUE.hitsPerGame - 1.0) * 0.30;
+  const formFactor = 1.0 + (recentHits / LEAGUE.hitsPerGame - 1.0) * 0.30;
 
   // Batting average factor
   const teamBA = fallback(team?.battingAverage, LEAGUE.battingAverage);

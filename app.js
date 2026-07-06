@@ -59,7 +59,7 @@ async function loadSlate() {
   try {
     const date = els.dateInput.value || toDateInputValue(new Date());
     const [mlbResult, espnResult] = await Promise.allSettled([
-      fetchJson(`${MLB_BASE}/schedule?sportId=1&date=${date}&hydrate=team,probablePitcher`),
+      fetchJson(`${MLB_BASE}/schedule?sportId=1&date=${date}&hydrate=team,probablePitcher,linescore`),
       fetchJson(`${ESPN_SCOREBOARD}?dates=${date.replaceAll("-", "")}`),
     ]);
 
@@ -133,7 +133,11 @@ async function compareSelectedGame() {
     renderSummary(projection);
     renderPitchers(projection);
     renderResults(projection);
-    els.sourceBadge.textContent = espnPitchers.away || espnPitchers.home ? "MLB + ESPN pitchers" : "MLB";
+    const calInfo = obtenerCalibracion();
+    const calText = calInfo.totalGames > 0
+      ? ` | Auto-Ajuste: Carreras x${calInfo.runsBias.toFixed(2)}, Hits x${calInfo.hitsBias.toFixed(2)} (${calInfo.totalGames} G)`
+      : " | Auto-Ajuste: Neutro (Sin historial)";
+    els.sourceBadge.textContent = (espnPitchers.away || espnPitchers.home ? "MLB + ESPN pitchers" : "MLB") + calText;
     setStatus("Comparación actualizada.", "ok");
   } catch (error) {
     setStatus(error.message || "No se pudo calcular la comparación.", "error");
@@ -215,20 +219,36 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   let hitsConfidence = "Baja";
   if (hitsProb >= 0.58) hitsConfidence = "Alta";
   else if (hitsProb >= 0.53) hitsConfidence = "Media";
+  const awayRecentRuns = awayRecent?.games?.map(g => g.runsFor);
+  const homeRecentRuns = homeRecent?.games?.map(g => g.runsFor);
+
+  // Cargar calibración automática (feedback loop)
+  const cal = obtenerCalibracion();
+
+  // Aplicar sesgos de calibración a las proyecciones base de carreras y hits
+  const calibratedAwayRuns = clamp(awayRuns * cal.runsBias, 2.0, 8.5);
+  const calibratedHomeRuns = clamp(homeRuns * cal.runsBias, 2.0, 8.5);
+  const calibratedTotalRuns = calcularTotalCarreras(calibratedAwayRuns, calibratedHomeRuns);
+
+  const calibratedAwayHitsRaw = awayHits * cal.hitsBias;
+  const calibratedHomeHitsRaw = homeHits * cal.hitsBias;
+
   const probability = calcularProbabilidadGanador({
-    awayRuns,
-    homeRuns,
+    awayRuns: calibratedAwayRuns,
+    homeRuns: calibratedHomeRuns,
     awayScores: { pitcher: awayPitcherMetrics, offense: awayOffense, form: awayForm, bullpen: awayBullpen, localia: awayLocalia, matchup: awayMatchup },
     homeScores: { pitcher: homePitcherMetrics, offense: homeOffense, form: homeForm, bullpen: homeBullpen, localia: homeLocalia, matchup: homeMatchup },
+    awayRecentRuns,
+    homeRecentRuns,
   });
-  const diff = round1(homeRuns - awayRuns);
+  const diff = round1(calibratedHomeRuns - calibratedAwayRuns);
   const favorite = probability.favorite === "home" ? homeName : awayName;
   const underdog = probability.favorite === "home" ? awayName : homeName;
   const winProbability = probability.value;
 
-  // Run Poisson solver using the sportsbook line or standard 8.5
+  // Run solver using the sportsbook line or standard 8.5
   const targetLine = odds.overUnder || 8.5;
-  const finalPoisson = calcularMatrizPoisson(awayRuns, homeRuns, targetLine);
+  const finalPoisson = calcularMatrizPoisson(calibratedAwayRuns, calibratedHomeRuns, targetLine, awayRecentRuns, homeRecentRuns);
 
   // Over/Under lean and probability
   let totalLean = "";
@@ -245,10 +265,10 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
       totalProb = Math.max(finalPoisson.overProb, finalPoisson.underProb);
     }
   } else {
-    if (totalRuns >= 8.9) {
+    if (calibratedTotalRuns >= 8.9) {
       totalLean = "Over estimado";
       totalProb = finalPoisson.overProb;
-    } else if (totalRuns <= 7.4) {
+    } else if (calibratedTotalRuns <= 7.4) {
       totalLean = "Under estimado";
       totalProb = finalPoisson.underProb;
     } else {
@@ -278,7 +298,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     }
   }
 
-  // Confidence calculations based on Poisson/Sabermetric probabilities
+  // Confidence calculations based on solver/Sabermetric probabilities
   let confidence = "Baja";
   if (winProbability >= 0.62) confidence = "Alta";
   else if (winProbability >= 0.55) confidence = "Media";
@@ -290,6 +310,102 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   let handicapConfidence = "Baja";
   if (runLineProb >= 0.58) handicapConfidence = "Alta";
   else if (runLineProb >= 0.53) handicapConfidence = "Media";
+
+  // CANDADO DE CONSISTENCIA DINÁMICA (Ratio Hits-Carreras) aplicado antes de ponderación
+  const awayHitsTodayLocked = Math.max(calibratedAwayHitsRaw, calibratedAwayRuns * 1.82);
+  const homeHitsTodayLocked = Math.max(calibratedHomeHitsRaw, calibratedHomeRuns * 1.82);
+
+  // REGLA DE PONDERACIÓN ESTRICTA (75/25) para Hits finales
+  const finalAwayHits = 0.75 * awayHitsTodayLocked + 0.25 * (awayRecent?.last10?.hitsPerGame ?? LEAGUE.hitsPerGame);
+  const finalHomeHits = 0.75 * homeHitsTodayLocked + 0.25 * (homeRecent?.last10?.hitsPerGame ?? LEAGUE.hitsPerGame);
+  const finalTotalHits = clamp(finalAwayHits + finalHomeHits, 11.5, 22.5);
+
+  // Run Negative Binomial/Poisson solver for hits
+  const awayRecentHits = awayRecent?.games?.map(g => g.hits);
+  const homeRecentHits = homeRecent?.games?.map(g => g.hits);
+  const hitsPoissonResult = calcularHitsPoisson(finalAwayHits, finalHomeHits, 16.5, awayRecentHits, homeRecentHits);
+
+  let finalHitsLean = "";
+  let finalHitsProb = 0;
+  if (hitsPoissonResult.overProb >= 0.525) {
+    finalHitsLean = "Over 16.5 hits";
+    finalHitsProb = hitsPoissonResult.overProb;
+  } else if (hitsPoissonResult.underProb >= 0.525) {
+    finalHitsLean = "Under 16.5 hits";
+    finalHitsProb = hitsPoissonResult.underProb;
+  } else {
+    finalHitsLean = "Total hits medio";
+    finalHitsProb = Math.max(hitsPoissonResult.overProb, hitsPoissonResult.underProb);
+  }
+
+  let finalHitsConfidence = "Baja";
+  if (finalHitsProb >= 0.58) finalHitsConfidence = "Alta";
+  else if (finalHitsProb >= 0.53) finalHitsConfidence = "Media";
+
+  // EVALUAR RESULTADO REAL PARA PARTIDOS FINALIZADOS (FEEDBACK LOOP)
+  const isFinal = game.status?.abstractGameState === "Final";
+  let winnerOutcome = null;
+  let totalRunsOutcome = null;
+  let handicapOutcome = null;
+  let totalHitsOutcome = null;
+
+  if (isFinal) {
+    const actualAwayRuns = number(game.teams?.away?.score);
+    const actualHomeRuns = number(game.teams?.home?.score);
+    const actualAwayHits = number(game.linescore?.teams?.away?.hits || estimateHitsFromRuns(actualAwayRuns));
+    const actualHomeHits = number(game.linescore?.teams?.home?.hits || estimateHitsFromRuns(actualHomeRuns));
+    const actualTotalRuns = actualAwayRuns + actualHomeRuns;
+    const actualTotalHits = actualAwayHits + actualHomeHits;
+
+    // Registrar en el feedback loop (utilizando las proyecciones BRUTAS para calcular sesgos estables)
+    guardarResultadoPartido(
+      game.gamePk,
+      game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now())),
+      awayRuns, // proyección de carreras original (uncalibrated)
+      homeRuns, // proyección de carreras original (uncalibrated)
+      actualAwayRuns,
+      actualHomeRuns,
+      awayHits, // proyección de hits original (uncalibrated)
+      homeHits, // proyección de hits original (uncalibrated)
+      actualAwayHits,
+      actualHomeHits
+    );
+
+    // 1. Ganador
+    const realWinner = actualHomeRuns > actualAwayRuns ? homeName : awayName;
+    winnerOutcome = realWinner === favorite ? "HIT" : "MISS";
+
+    // 2. Total Carreras
+    const runLine = odds.overUnder || 8.5;
+    if (totalLean.includes("Over")) {
+      totalRunsOutcome = actualTotalRuns > runLine ? "HIT" : (actualTotalRuns === runLine ? "PUSH" : "MISS");
+    } else if (totalLean.includes("Under")) {
+      totalRunsOutcome = actualTotalRuns < runLine ? "HIT" : (actualTotalRuns === runLine ? "PUSH" : "MISS");
+    } else {
+      totalRunsOutcome = Math.abs(actualTotalRuns - runLine) <= 1.0 ? "HIT" : "MISS";
+    }
+
+    // 3. Hándicap (Run Line)
+    const hcMatch = runLinePick.match(/(.+)\s+([+-]\d+\.\d+)/);
+    if (hcMatch) {
+      const teamNameMatched = hcMatch[1].trim();
+      const hcVal = parseFloat(hcMatch[2]);
+      const teamIsHome = (teamNameMatched === homeName);
+      const runDiff = teamIsHome ? (actualHomeRuns - actualAwayRuns) : (actualAwayRuns - actualHomeRuns);
+      if (runDiff + hcVal > 0) handicapOutcome = "HIT";
+      else if (runDiff + hcVal < 0) handicapOutcome = "MISS";
+      else handicapOutcome = "PUSH";
+    }
+
+    // 4. Hits Totales
+    if (finalHitsLean.includes("Over")) {
+      totalHitsOutcome = actualTotalHits > 16.5 ? "HIT" : (actualTotalHits === 16.5 ? "PUSH" : "MISS");
+    } else if (finalHitsLean.includes("Under")) {
+      totalHitsOutcome = actualTotalHits < 16.5 ? "HIT" : (actualTotalHits === 16.5 ? "PUSH" : "MISS");
+    } else {
+      totalHitsOutcome = Math.abs(actualTotalHits - 16.5) <= 1.0 ? "HIT" : "MISS";
+    }
+  }
 
   const explanation = buildExplanation({
     awayName,
@@ -304,19 +420,19 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     homeBullpen,
     weather,
     odds,
-    totalRuns,
+    totalRuns: calibratedTotalRuns,
   });
   const finalPick = generarPronosticoFinal({
     ganador: favorite,
     probabilidadGanador: Math.round(winProbability * 100),
-    carrerasEquipoVisitante: round1(awayRuns),
-    carrerasEquipoLocal: round1(homeRuns),
-    totalCarreras: totalRuns,
+    carrerasEquipoVisitante: round1(calibratedAwayRuns),
+    carrerasEquipoLocal: round1(calibratedHomeRuns),
+    totalCarreras: calibratedTotalRuns,
     recomendacionTotal: totalLean,
     handicap: runLinePick,
-    hitsTotales: totalHits,
+    hitsTotales: round1(finalTotalHits),
     confianza: confidence,
-    marcadorEstimado: `${awayName} ${Math.max(1, Math.round(awayRuns))} - ${homeName} ${Math.max(1, Math.round(homeRuns))}`,
+    marcadorEstimado: `${awayName} ${Math.max(1, Math.round(calibratedAwayRuns))} - ${homeName} ${Math.max(1, Math.round(calibratedHomeRuns))}`,
     explicacion: explanation,
   });
 
@@ -325,12 +441,12 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     game,
     awayName,
     homeName,
-    awayRuns: round1(awayRuns),
-    homeRuns: round1(homeRuns),
-    awayHits: round1(awayHits),
-    homeHits: round1(homeHits),
-    totalRuns,
-    totalHits,
+    awayRuns: round1(calibratedAwayRuns),
+    homeRuns: round1(calibratedHomeRuns),
+    awayHits: round1(finalAwayHits),
+    homeHits: round1(finalHomeHits),
+    totalRuns: calibratedTotalRuns,
+    totalHits: round1(finalTotalHits),
     weather,
     diff,
     favorite,
@@ -363,30 +479,34 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         pick: favorite,
         estimate: `${Math.round(winProbability * 100)}%`,
         confidence,
-        base: explanation[0] || `Carreras: ${awayName} ${round1(awayRuns)} - ${homeName} ${round1(homeRuns)}`,
+        base: explanation[0] || `Carreras: ${awayName} ${round1(calibratedAwayRuns)} - ${homeName} ${round1(calibratedHomeRuns)}`,
+        outcome: winnerOutcome,
       },
       {
         market: "Total carreras",
         pick: totalLean,
-        estimate: `${totalRuns.toFixed(1)} runs`,
+        estimate: `${calibratedTotalRuns.toFixed(1)} runs`,
         confidence: totalConfidence,
         base: odds.overUnder
-          ? `Línea de ESPN: ${odds.overUnder} (Prob del pick: ${Math.round(totalProb * 100)}% por Poisson)`
-          : `Total estimado: ${totalRuns.toFixed(1)} (Prob del pick: ${Math.round(totalProb * 100)}% por Poisson)`,
+          ? `Línea de ESPN: ${odds.overUnder} (Prob del pick: ${Math.round(totalProb * 100)}% por solver ${finalPoisson.distribution.away === "NegativeBinomial" || finalPoisson.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"})`
+          : `Total estimado: ${calibratedTotalRuns.toFixed(1)} (Prob del pick: ${Math.round(totalProb * 100)}% por solver ${finalPoisson.distribution.away === "NegativeBinomial" || finalPoisson.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"})`,
+        outcome: totalRunsOutcome,
       },
       {
         market: "Handicap",
         pick: runLinePick,
         estimate: `Prob: ${Math.round(runLineProb * 100)}%`,
         confidence: handicapConfidence,
-        base: `Diferencia proyectada de carreras: ${diff > 0 ? '+' : ''}${diff}. Calculado vía Poisson.`,
+        base: `Diferencia proyectada de carreras: ${diff > 0 ? '+' : ''}${diff}. Calculado vía solver.`,
+        outcome: handicapOutcome,
       },
       {
         market: "Hits totales",
-        pick: hitsLean,
-        estimate: `${totalHits.toFixed(1)} H`,
-        confidence: hitsConfidence,
-        base: `${awayName} ${round1(awayHits)} H, ${homeName} ${round1(homeHits)} H (Prob del pick: ${Math.round(hitsProb * 100)}% por Poisson contra línea 16.5)`,
+        pick: finalHitsLean,
+        estimate: `${finalTotalHits.toFixed(1)} H`,
+        confidence: finalHitsConfidence,
+        base: `${awayName} ${round1(finalAwayHits)} H, ${homeName} ${round1(finalHomeHits)} H (Prob del pick: ${Math.round(finalHitsProb * 100)}% por solver ${hitsPoissonResult.distribution.away === "NegativeBinomial" || hitsPoissonResult.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"} contra línea 16.5)`,
+        outcome: totalHitsOutcome,
       },
       ...(weather
         ? [
@@ -396,15 +516,17 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
               estimate: weather.highTemperature ? `Máx ${weather.highTemperature}°` : "N/D",
               confidence: "Media",
               base: weather.link ? "Datos ESPN" : "Clima obtenido de ESPN",
+              outcome: null,
             },
           ]
         : []),
       {
         market: "Marcador estimado",
         pick: finalPick.marcadorEstimado,
-        estimate: `${totalRuns.toFixed(1)} carreras`,
+        estimate: `${calibratedTotalRuns.toFixed(1)} carreras`,
         confidence: "Referencia",
         base: explanation.slice(1, 3).join(" "),
+        outcome: null,
       },
     ],
   };
@@ -591,7 +713,7 @@ function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPi
   return clamp(raw, 2.0, 8.5);
 }
 
-function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScores }) {
+function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScores, awayRecentRuns, homeRecentRuns }) {
   const weights = { pitcher: 0.3, offense: 0.25, form: 0.15, bullpen: 0.15, localia: 0.05, matchup: 0.1 };
   const awayComposite = weightedTeamScore(awayScores, weights);
   const homeComposite = weightedTeamScore(homeScores, weights);
@@ -599,15 +721,15 @@ function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScore
   // Calculate winning probability via Pythagenpat
   const pythagenpatHomeProb = pythagoreanWinProb(awayRuns, homeRuns);
   
-  // Calculate winning probability via Poisson distribution
-  const poissonResult = calcularMatrizPoisson(awayRuns, homeRuns, LEAGUE.totalRunsLine);
+  // Calculate winning probability via solver matrix (which handles NB / Poisson dynamically)
+  const poissonResult = calcularMatrizPoisson(awayRuns, homeRuns, LEAGUE.totalRunsLine, awayRecentRuns, homeRecentRuns);
   const poissonHomeProb = poissonResult.homeWinProb;
 
   // Model index edge (traditional composite weight)
   const modelEdge = clamp((homeComposite - awayComposite) * 1.35, -0.25, 0.25);
   const compositeHomeProb = clamp(0.5 + modelEdge, 0.25, 0.75);
 
-  // Consolidate the probabilities: 50% Poisson, 35% Pythagenpat, 15% Composite score
+  // Consolidate the probabilities: 50% solver, 35% Pythagenpat, 15% Composite score
   const homeProb = clamp(poissonHomeProb * 0.50 + pythagenpatHomeProb * 0.35 + compositeHomeProb * 0.15, 0.20, 0.80);
   const favorite = homeProb >= 0.5 ? "home" : "away";
 
@@ -1273,15 +1395,25 @@ function teamLogo(pitcher, teamName) {
 function renderResults(projection) {
   els.resultsBody.innerHTML = projection.rows
     .map(
-      (row) => `
-        <tr class="bg-white">
-          <td class="px-4 py-4 font-bold text-slate-950">${row.market}</td>
-          <td class="px-4 py-4 font-semibold text-emerald-700">${row.pick}</td>
-          <td class="px-4 py-4 font-semibold text-slate-800">${row.estimate}</td>
-          <td class="px-4 py-4">${confidenceBadge(row.confidence)}</td>
-          <td class="px-4 py-4 text-slate-500">${row.base}</td>
-        </tr>
-      `
+      (row) => {
+        let outcomeBadge = "";
+        if (row.outcome === "HIT") {
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">✓ ACERTADO</span>`;
+        } else if (row.outcome === "MISS") {
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-800">✗ FALLADO</span>`;
+        } else if (row.outcome === "PUSH") {
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-800">⟷ DEVUELTO</span>`;
+        }
+        return `
+          <tr class="bg-white">
+            <td class="px-4 py-4 font-bold text-slate-950">${row.market}</td>
+            <td class="px-4 py-4 font-semibold text-emerald-700">${row.pick}${outcomeBadge}</td>
+            <td class="px-4 py-4 font-semibold text-slate-800">${row.estimate}</td>
+            <td class="px-4 py-4">${confidenceBadge(row.confidence)}</td>
+            <td class="px-4 py-4 text-slate-500">${row.base}</td>
+          </tr>
+        `;
+      }
     )
     .join("");
 }
@@ -1577,7 +1709,7 @@ function poissonProbability(lambda, k) {
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
 }
 
-function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine) {
+function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine, awayRecentRuns, homeRecentRuns) {
   let homeWinProb = 0;
   let awayWinProb = 0;
   let overProb = 0;
@@ -1587,10 +1719,13 @@ function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine) {
 
   const MAX_RUNS = 18;
 
+  const awayDist = obtenerDistribucion(awayRuns, awayRecentRuns);
+  const homeDist = obtenerDistribucion(homeRuns, homeRecentRuns);
+
   for (let a = 0; a <= MAX_RUNS; a++) {
-    const pAway = poissonProbability(awayRuns, a);
+    const pAway = evaluarProbabilidad(awayDist, a);
     for (let h = 0; h <= MAX_RUNS; h++) {
-      const pHome = poissonProbability(homeRuns, h);
+      const pHome = evaluarProbabilidad(homeDist, h);
       const jointProb = pAway * pHome;
 
       if (h > a) {
@@ -1624,7 +1759,11 @@ function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine) {
     overProb,
     underProb,
     homeMinus1_5Prob,
-    awayMinus1_5Prob
+    awayMinus1_5Prob,
+    distribution: {
+      away: awayDist.type,
+      home: homeDist.type
+    }
   };
 }
 
@@ -1637,16 +1776,19 @@ function pythagoreanWinProb(awayRuns, homeRuns) {
   return clamp(homePower / (homePower + awayPower), 0.1, 0.9);
 }
 
-function calcularHitsPoisson(awayHits, homeHits, line) {
+function calcularHitsPoisson(awayHits, homeHits, line, awayRecentHits, homeRecentHits) {
   let overProb = 0;
   let underProb = 0;
   const targetLine = line || 16.5;
   const MAX_HITS = 25;
 
+  const awayDist = obtenerDistribucion(awayHits, awayRecentHits);
+  const homeDist = obtenerDistribucion(homeHits, homeRecentHits);
+
   for (let a = 0; a <= MAX_HITS; a++) {
-    const pAway = poissonProbability(awayHits, a);
+    const pAway = evaluarProbabilidad(awayDist, a);
     for (let h = 0; h <= MAX_HITS; h++) {
-      const pHome = poissonProbability(homeHits, h);
+      const pHome = evaluarProbabilidad(homeDist, h);
       const jointProb = pAway * pHome;
 
       const total = a + h;
@@ -1660,7 +1802,14 @@ function calcularHitsPoisson(awayHits, homeHits, line) {
       }
     }
   }
-  return { overProb, underProb };
+  return { 
+    overProb, 
+    underProb,
+    distribution: {
+      away: awayDist.type,
+      home: homeDist.type
+    }
+  };
 }
 
 function pitcherBase(game, awayPitcher, homePitcher) {
@@ -1835,4 +1984,107 @@ function locationWinRate(games, isHome) {
   const filtered = games.filter((game) => game.isHome === isHome);
   if (!filtered.length) return 0.5;
   return filtered.filter((game) => game.win).length / filtered.length;
+}
+
+function gammaln(z) {
+  if (z < 0.5) {
+    return Math.log(Math.PI) - Math.log(Math.abs(Math.sin(Math.PI * z))) - gammaln(1 - z);
+  }
+  const g = 7;
+  const p = [
+    0.99999999999980993,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7
+  ];
+  z -= 1;
+  let x = p[0];
+  for (let i = 1; i < p.length; i++) {
+    x += p[i] / (z + i);
+  }
+  const t = z + g + 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+function negativeBinomialProbability(r, p, k) {
+  if (k < 0) return 0;
+  const logProb = gammaln(k + r) - gammaln(r) - gammaln(k + 1) + r * Math.log(1 - p) + k * Math.log(p);
+  return Math.exp(logProb);
+}
+
+function obtenerDistribucion(mean, recentValues) {
+  if (recentValues && recentValues.length >= 2) {
+    const avg = average(recentValues);
+    if (avg > 0) {
+      const sumSqDiff = recentValues.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0);
+      const variance = sumSqDiff / (recentValues.length - 1);
+      if (variance > avg) {
+        const dispersion = variance / avg;
+        const projectedVariance = dispersion * mean;
+        const r = (mean * mean) / (projectedVariance - mean);
+        const p = (projectedVariance - mean) / projectedVariance;
+        return { type: "NegativeBinomial", r, p, mean, variance: projectedVariance };
+      }
+    }
+  }
+  return { type: "Poisson", lambda: mean, mean, variance: mean };
+}
+
+function evaluarProbabilidad(dist, k) {
+  if (dist.type === "NegativeBinomial") {
+    return negativeBinomialProbability(dist.r, dist.p, k);
+  } else {
+    return poissonProbability(dist.lambda, k);
+  }
+}
+
+function obtenerCalibracion() {
+  try {
+    const history = JSON.parse(localStorage.getItem("mlb_model_history") || "[]");
+    if (!history.length) {
+      return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
+    }
+    let sumProjRuns = 0;
+    let sumActRuns = 0;
+    let sumProjHits = 0;
+    let sumActHits = 0;
+    history.forEach((g) => {
+      sumProjRuns += (g.projAwayRuns + g.projHomeRuns);
+      sumActRuns += (g.actAwayRuns + g.actHomeRuns);
+      sumProjHits += (g.projAwayHits + g.projHomeHits);
+      sumActHits += (g.actAwayHits + g.actHomeHits);
+    });
+    const runsBias = sumProjRuns > 0 ? clamp(sumActRuns / sumProjRuns, 0.85, 1.15) : 1.0;
+    const hitsBias = sumProjHits > 0 ? clamp(sumActHits / sumProjHits, 0.85, 1.15) : 1.0;
+    return { runsBias, hitsBias, totalGames: history.length };
+  } catch {
+    return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
+  }
+}
+
+function guardarResultadoPartido(gamePk, date, projAwayRuns, projHomeRuns, actAwayRuns, actHomeRuns, projAwayHits, projHomeHits, actAwayHits, actHomeHits) {
+  try {
+    const history = JSON.parse(localStorage.getItem("mlb_model_history") || "[]");
+    if (history.some((g) => g.gamePk === gamePk)) return; // Evitar duplicados
+    history.push({
+      gamePk,
+      date,
+      projAwayRuns,
+      projHomeRuns,
+      actAwayRuns,
+      actHomeRuns,
+      projAwayHits,
+      projHomeHits,
+      actAwayHits,
+      actHomeHits
+    });
+    localStorage.setItem("mlb_model_history", JSON.stringify(history));
+  } catch (error) {
+    console.error("Error al guardar calibración:", error);
+  }
 }

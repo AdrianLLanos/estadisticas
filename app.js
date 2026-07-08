@@ -1,5 +1,10 @@
 const MLB_BASE = "https://statsapi.mlb.com/api/v1";
 const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard";
+const CALIBRATION_HISTORY_KEY = "mlb_model_history";
+const MAX_CALIBRATION_HISTORY = 240;
+const MAX_TEAM_CACHE = 40;
+const MAX_PITCHER_CACHE = 140;
+const MAX_RECENT_CONTEXT_CACHE = 90;
 const LEAGUE = {
   runsPerGame: 4.45,
   hitsPerGame: 8.25,
@@ -818,7 +823,7 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
       homeWinRate: locationWinRate(parsedGames, true),
       awayWinRate: locationWinRate(parsedGames, false),
     };
-    state.recentContexts.set(cacheKey, context);
+    setLimitedMapValue(state.recentContexts, cacheKey, context, MAX_RECENT_CONTEXT_CACHE);
     return context;
   } catch {
     const neutral = {
@@ -828,7 +833,7 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
       homeWinRate: 0.5,
       awayWinRate: 0.5,
     };
-    state.recentContexts.set(cacheKey, neutral);
+    setLimitedMapValue(state.recentContexts, cacheKey, neutral, MAX_RECENT_CONTEXT_CACHE);
     return neutral;
   }
 }
@@ -1015,7 +1020,7 @@ async function getTeamStats(teamId) {
     whip: number(pitching.whip) || LEAGUE.whip,
   };
 
-  state.teamStats.set(teamId, normalized);
+  setLimitedMapValue(state.teamStats, teamId, normalized, MAX_TEAM_CACHE);
   return normalized;
 }
 
@@ -1069,10 +1074,10 @@ async function getPitcherStats(playerId, season = new Date().getFullYear()) {
       pitchHand: person.pitchHand?.code || "",
       recentStarts,
     };
-    state.pitcherStats.set(cacheKey, normalized);
+    setLimitedMapValue(state.pitcherStats, cacheKey, normalized, MAX_PITCHER_CACHE);
     return normalized;
   } catch {
-    state.pitcherStats.set(cacheKey, null);
+    setLimitedMapValue(state.pitcherStats, cacheKey, null, MAX_PITCHER_CACHE);
     return null;
   }
 }
@@ -2049,50 +2054,86 @@ function evaluarProbabilidad(dist, k) {
   }
 }
 
-function obtenerCalibracion() {
-  try {
-    const history = JSON.parse(localStorage.getItem("mlb_model_history") || "[]");
-    if (!history.length) {
-      return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
-    }
-    let sumProjRuns = 0;
-    let sumActRuns = 0;
-    let sumProjHits = 0;
-    let sumActHits = 0;
-    history.forEach((g) => {
-      sumProjRuns += (g.projAwayRuns + g.projHomeRuns);
-      sumActRuns += (g.actAwayRuns + g.actHomeRuns);
-      sumProjHits += (g.projAwayHits + g.projHomeHits);
-      sumActHits += (g.actAwayHits + g.actHomeHits);
-    });
-    const runsBias = sumProjRuns > 0 ? clamp(sumActRuns / sumProjRuns, 0.85, 1.15) : 1.0;
-    const hitsBias = sumProjHits > 0 ? clamp(sumActHits / sumProjHits, 0.85, 1.15) : 1.0;
-    return { runsBias, hitsBias, totalGames: history.length };
-  } catch {
-    return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
+function setLimitedMapValue(map, key, value, maxSize) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+
+  while (map.size > maxSize) {
+    const oldestKey = map.keys().next().value;
+    map.delete(oldestKey);
   }
 }
 
-function guardarResultadoPartido(gamePk, date, projAwayRuns, projHomeRuns, actAwayRuns, actHomeRuns, projAwayHits, projHomeHits, actAwayHits, actHomeHits) {
+function compactCalibrationHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  const uniqueByGame = new Map();
+  history.forEach((item) => {
+    if (!item?.gamePk) return;
+    uniqueByGame.set(item.gamePk, item);
+  });
+
+  return [...uniqueByGame.values()]
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
+    .slice(-MAX_CALIBRATION_HISTORY);
+}
+
+function readCalibrationHistory() {
   try {
-    const history = JSON.parse(localStorage.getItem("mlb_model_history") || "[]");
-    if (history.some((g) => g.gamePk === gamePk)) return; // Evitar duplicados
-    history.push({
-      gamePk,
-      date,
-      projAwayRuns,
-      projHomeRuns,
-      actAwayRuns,
-      actHomeRuns,
-      projAwayHits,
-      projHomeHits,
-      actAwayHits,
-      actHomeHits
-    });
-    localStorage.setItem("mlb_model_history", JSON.stringify(history));
-  } catch (error) {
-    console.error("Error al guardar calibración:", error);
+    const raw = JSON.parse(localStorage.getItem(CALIBRATION_HISTORY_KEY) || "[]");
+    return compactCalibrationHistory(raw);
+  } catch {
+    return [];
   }
+}
+
+function writeCalibrationHistory(history) {
+  try {
+    localStorage.setItem(CALIBRATION_HISTORY_KEY, JSON.stringify(compactCalibrationHistory(history)));
+  } catch (error) {
+    console.error("Error al guardar calibracion:", error);
+  }
+}
+
+function obtenerCalibracion() {
+  const history = readCalibrationHistory();
+  if (!history.length) {
+    return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
+  }
+
+  let sumProjRuns = 0;
+  let sumActRuns = 0;
+  let sumProjHits = 0;
+  let sumActHits = 0;
+  history.forEach((g) => {
+    sumProjRuns += numberOr(g.projAwayRuns, 0) + numberOr(g.projHomeRuns, 0);
+    sumActRuns += numberOr(g.actAwayRuns, 0) + numberOr(g.actHomeRuns, 0);
+    sumProjHits += numberOr(g.projAwayHits, 0) + numberOr(g.projHomeHits, 0);
+    sumActHits += numberOr(g.actAwayHits, 0) + numberOr(g.actHomeHits, 0);
+  });
+
+  const runsBias = sumProjRuns > 0 ? clamp(sumActRuns / sumProjRuns, 0.85, 1.15) : 1.0;
+  const hitsBias = sumProjHits > 0 ? clamp(sumActHits / sumProjHits, 0.85, 1.15) : 1.0;
+  return { runsBias, hitsBias, totalGames: history.length };
+}
+
+function guardarResultadoPartido(gamePk, date, projAwayRuns, projHomeRuns, actAwayRuns, actHomeRuns, projAwayHits, projHomeHits, actAwayHits, actHomeHits) {
+  const history = readCalibrationHistory();
+  if (history.some((g) => g.gamePk === gamePk)) return;
+
+  history.push({
+    gamePk,
+    date,
+    projAwayRuns,
+    projHomeRuns,
+    actAwayRuns,
+    actHomeRuns,
+    projAwayHits,
+    projHomeHits,
+    actAwayHits,
+    actHomeHits
+  });
+  writeCalibrationHistory(history);
 }
 
 function updateCalibrationBadge() {
@@ -2158,7 +2199,7 @@ async function runBackgroundCalibration(dates) {
       }
     }
 
-    const history = JSON.parse(localStorage.getItem("mlb_model_history") || "[]");
+    const history = readCalibrationHistory();
     const uncalibratedGames = allFinishedGames.filter(g => !history.some(h => h.gamePk === g.gamePk));
 
     if (uncalibratedGames.length === 0) {

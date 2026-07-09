@@ -170,6 +170,20 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const espnTeams = extractEspnTeams(espnEvent);
   awayStats = { ...awayStats, ...espnRecords.away };
   homeStats = { ...homeStats, ...espnRecords.home };
+  const awayTeamProfile = buildTeamSplitProfile({
+    team: awayTeam,
+    recentContext: awayRecent,
+    logo: espnTeams.away?.logo,
+    abbreviation: espnTeams.away?.abbreviation,
+    role: "Visitante",
+  });
+  const homeTeamProfile = buildTeamSplitProfile({
+    team: homeTeam,
+    recentContext: homeRecent,
+    logo: espnTeams.home?.logo,
+    abbreviation: espnTeams.home?.abbreviation,
+    role: "Local",
+  });
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
   const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
   const awayOffense = calcularOfensivaEquipo(awayStats);
@@ -474,20 +488,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
       home: homePitcher,
     },
     teamProfiles: {
-      away: buildTeamSplitProfile({
-        team: awayTeam,
-        recentContext: awayRecent,
-        logo: espnTeams.away?.logo,
-        abbreviation: espnTeams.away?.abbreviation,
-        role: "Visitante",
-      }),
-      home: buildTeamSplitProfile({
-        team: homeTeam,
-        recentContext: homeRecent,
-        logo: espnTeams.home?.logo,
-        abbreviation: espnTeams.home?.abbreviation,
-        role: "Local",
-      }),
+      away: awayTeamProfile,
+      home: homeTeamProfile,
     },
     model: {
       awayPitcherMetrics,
@@ -967,18 +969,12 @@ function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviati
     home: summarizeTeamSplit(games.filter((game) => game.isHome)),
     away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
   };
-  const records = {
-    all: recordFromSplit(splits.all),
-    home: recordFromSplit(splits.home),
-    away: recordFromSplit(splits.away),
-  };
 
   return {
     name: team?.name || "Equipo N/D",
     abbreviation: abbreviation || teamAbbrev(team?.name || ""),
     logo: logo || (team?.id ? `https://www.mlbstatic.com/team-logos/${team.id}.svg` : ""),
     role,
-    records,
     splits,
   };
 }
@@ -988,10 +984,6 @@ function summarizeTeamSplit(games, seasonFallback = null) {
   if (!count) {
     return {
       games: 0,
-      wins: null,
-      losses: null,
-      winRate: null,
-      results: [],
       runsForPerGame: Number.isFinite(seasonFallback?.runsPerGame) ? seasonFallback.runsPerGame : null,
       runsAllowedPerGame: Number.isFinite(seasonFallback?.runsAllowedPerGame) ? seasonFallback.runsAllowedPerGame : null,
       runDiffPerGame:
@@ -1004,16 +996,11 @@ function summarizeTeamSplit(games, seasonFallback = null) {
     };
   }
 
-  const wins = games.filter((game) => game.win).length;
   const runsForPerGame = average(games.map((game) => game.runsFor));
   const runsAllowedPerGame = average(games.map((game) => game.runsAllowed));
 
   return {
     games: count,
-    wins,
-    losses: count - wins,
-    winRate: wins / count,
-    results: games.slice(-5).map((game) => (game.win ? "W" : "L")),
     runsForPerGame,
     runsAllowedPerGame,
     runDiffPerGame: runsForPerGame - runsAllowedPerGame,
@@ -1021,11 +1008,6 @@ function summarizeTeamSplit(games, seasonFallback = null) {
     hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
     overRate: games.filter((game) => game.over).length / count,
   };
-}
-
-function recordFromSplit(split) {
-  if (!split?.games || !Number.isFinite(split.wins) || !Number.isFinite(split.losses)) return null;
-  return { wins: split.wins, losses: split.losses, pct: split.games ? split.wins / split.games : 0.5 };
 }
 
 function aggregateBullpenGames(bullpenGames, referenceDate, relieversAvailable) {
@@ -1406,21 +1388,6 @@ function teamSplitCard(profile) {
         <table class="w-full min-w-[300px] text-center text-xs">
           <thead class="text-[11px] font-black text-slate-600">
             <tr>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Forma</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Resultados</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Win %</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${teamFormRow("All", profile.splits.all, profile.records.all)}
-            ${teamFormRow("Home", profile.splits.home, profile.records.home)}
-            ${teamFormRow("Away", profile.splits.away, profile.records.away)}
-          </tbody>
-        </table>
-
-        <table class="mt-3 w-full min-w-[300px] text-center text-xs">
-          <thead class="text-[11px] font-black text-slate-600">
-            <tr>
               <th class="border border-slate-200 bg-slate-50 px-2 py-2">Stats</th>
               <th class="border border-slate-200 bg-slate-50 px-2 py-2">Overall</th>
               <th class="border border-slate-200 bg-slate-50 px-2 py-2">Home</th>
@@ -1438,17 +1405,6 @@ function teamSplitCard(profile) {
         </table>
       </div>
     </article>
-  `;
-}
-
-function teamFormRow(label, split, record) {
-  const pct = Number.isFinite(record?.pct) ? record.pct : split?.winRate;
-  return `
-    <tr>
-      <td class="border border-slate-200 px-2 py-2 font-semibold text-slate-700">${label}</td>
-      <td class="border border-slate-200 px-2 py-2">${resultBadges(split?.results || [])}</td>
-      <td class="border border-slate-200 px-2 py-2">${winPctBadge(pct)}</td>
-    </tr>
   `;
 }
 
@@ -2059,26 +2015,6 @@ function formatSplitValue(value, digits = 1, signed = false, pct = false) {
   if (pct) return `${Math.round(value * 100)}%`;
   const fixed = value.toFixed(digits);
   return signed && value > 0 ? `+${fixed}` : fixed;
-}
-
-function resultBadges(results) {
-  if (!results.length) return `<span class="font-semibold text-slate-400">N/D</span>`;
-
-  return results
-    .map((result) => {
-      const tone = result === "W" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700";
-      return `<span class="mx-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-[11px] font-black ${tone}">${result}</span>`;
-    })
-    .join("");
-}
-
-function winPctBadge(value) {
-  if (!Number.isFinite(value)) {
-    return `<span class="inline-flex rounded-md bg-slate-100 px-2 py-1 text-xs font-black text-slate-500">N/D</span>`;
-  }
-
-  const tone = value >= 0.55 ? "bg-emerald-100 text-emerald-800" : value >= 0.45 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800";
-  return `<span class="inline-flex rounded-md px-2 py-1 text-xs font-black ${tone}">${Math.round(value * 100)}%</span>`;
 }
 
 function formatNullable(value) {

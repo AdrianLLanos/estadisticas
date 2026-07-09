@@ -5,7 +5,6 @@ const MAX_CALIBRATION_HISTORY = 240;
 const MAX_TEAM_CACHE = 40;
 const MAX_PITCHER_CACHE = 140;
 const MAX_RECENT_CONTEXT_CACHE = 90;
-const MAX_LOCATION_SPLIT_CACHE = 60;
 const LEAGUE = {
   runsPerGame: 4.45,
   hitsPerGame: 8.25,
@@ -34,7 +33,6 @@ const state = {
   teamStats: new Map(),
   pitcherStats: new Map(),
   recentContexts: new Map(),
-  locationSplits: new Map(),
   isCalibrating: false,
 };
 
@@ -121,15 +119,13 @@ async function compareSelectedGame() {
     const espnPitchers = extractEspnPitchers(espnEvent);
     const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
     const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, awayLocationSplits, homeLocationSplits] = await Promise.all([
+    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
       getPitcherStats(game.teams.home.probablePitcher?.id, season),
       getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
       getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
-      getTeamLocationSplits(away.id, referenceDate),
-      getTeamLocationSplits(home.id, referenceDate),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
@@ -142,8 +138,6 @@ async function compareSelectedGame() {
       homePitcher,
       awayRecent,
       homeRecent,
-      awayLocationSplits,
-      homeLocationSplits,
       espnEvent,
     });
 
@@ -164,7 +158,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, awayLocationSplits, homeLocationSplits, espnEvent }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
@@ -482,18 +476,14 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     teamProfiles: {
       away: buildTeamSplitProfile({
         team: awayTeam,
-        teamStats: awayStats,
         recentContext: awayRecent,
-        locationSplits: awayLocationSplits,
         logo: espnTeams.away?.logo,
         abbreviation: espnTeams.away?.abbreviation,
         role: "Visitante",
       }),
       home: buildTeamSplitProfile({
         team: homeTeam,
-        teamStats: homeStats,
         recentContext: homeRecent,
-        locationSplits: homeLocationSplits,
         logo: espnTeams.home?.logo,
         abbreviation: espnTeams.home?.abbreviation,
         role: "Local",
@@ -866,35 +856,6 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
   }
 }
 
-async function getTeamLocationSplits(teamId, referenceDate) {
-  const cacheKey = `${teamId}-${referenceDate}`;
-  if (state.locationSplits.has(cacheKey)) return state.locationSplits.get(cacheKey);
-
-  try {
-    const season = String(referenceDate || "").slice(0, 4) || String(new Date().getFullYear());
-    const start = `${season}-03-01`;
-    const end = addDays(referenceDate, -1);
-    const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
-    const games = (schedule.dates || [])
-      .flatMap((date) => date.games || [])
-      .filter((game) => game.status?.abstractGameState === "Final")
-      .map((game) => parseRecentTeamGame(game, null, teamId))
-      .filter(Boolean);
-
-    const splits = {
-      all: summarizeTeamSplit(games),
-      home: summarizeTeamSplit(games.filter((game) => game.isHome)),
-      away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
-    };
-    setLimitedMapValue(state.locationSplits, cacheKey, splits, MAX_LOCATION_SPLIT_CACHE);
-    return splits;
-  } catch {
-    const fallbackSplits = null;
-    setLimitedMapValue(state.locationSplits, cacheKey, fallbackSplits, MAX_LOCATION_SPLIT_CACHE);
-    return fallbackSplits;
-  }
-}
-
 async function getActivePitchers(teamId, probablePitcherId) {
   try {
     const data = await fetchJson(`${MLB_BASE}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=season,group=pitching))`);
@@ -999,18 +960,17 @@ function aggregateRecentGames(games) {
   };
 }
 
-function buildTeamSplitProfile({ team, teamStats = {}, recentContext = {}, locationSplits = null, logo = "", abbreviation = "", role = "" }) {
+function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviation = "", role = "" }) {
   const games = recentContext?.games || [];
-  const fallbackSplits = {
-    all: summarizeTeamSplit(games, teamStats),
+  const splits = {
+    all: summarizeTeamSplit(games),
     home: summarizeTeamSplit(games.filter((game) => game.isHome)),
     away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
   };
-  const splits = locationSplits || fallbackSplits;
   const records = {
-    all: teamStats.overallRecord || recordFromSplit(splits.all),
-    home: teamStats.homeRecord || recordFromSplit(splits.home),
-    away: teamStats.awayRecord || recordFromSplit(splits.away),
+    all: recordFromSplit(splits.all),
+    home: recordFromSplit(splits.home),
+    away: recordFromSplit(splits.away),
   };
 
   return {

@@ -973,7 +973,7 @@ function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviati
   return {
     name: team?.name || "Equipo N/D",
     abbreviation: abbreviation || teamAbbrev(team?.name || ""),
-    logo: logo || (team?.id ? `https://www.mlbstatic.com/team-logos/${team.id}.svg` : ""),
+    logo: team?.id ? `https://www.mlbstatic.com/team-logos/${team.id}.svg` : logo,
     role,
     splits,
   };
@@ -1373,7 +1373,7 @@ function teamSplitCard(profile) {
     <article class="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div class="flex items-center gap-3 bg-slate-800 px-4 py-3 text-white">
         <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-white p-1">
-          <img src="${escapeHtml(profile.logo)}" alt="${escapeHtml(profile.name)}" class="h-full w-full object-contain img-crisp" loading="lazy" />
+          <img src="${escapeHtml(profile.logo)}" alt="${escapeHtml(profile.name)}" class="h-full w-full object-contain img-smooth" loading="lazy" />
         </div>
         <div class="min-w-0">
           <div class="flex items-center gap-2">
@@ -1389,17 +1389,17 @@ function teamSplitCard(profile) {
           <thead class="text-[11px] font-black text-slate-600">
             <tr>
               <th class="border border-slate-200 bg-slate-50 px-2 py-2">Stats</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Overall</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Home</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Away</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">General</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Local</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Visita</th>
             </tr>
           </thead>
           <tbody>
-            ${teamStatsRow("Runs / G", profile, "runsForPerGame", 1)}
-            ${teamStatsRow("RA / G", profile, "runsAllowedPerGame", 1)}
-            ${teamStatsRow("Diff", profile, "runDiffPerGame", 1, true)}
-            ${teamStatsRow("Hits / G", profile, "hitsPerGame", 1)}
-            ${teamStatsRow("HA / G", profile, "hitsAllowedPerGame", 1)}
+            ${teamStatsRow("Carr/G", profile, "runsForPerGame", 1)}
+            ${teamStatsRow("Rec/G", profile, "runsAllowedPerGame", 1)}
+            ${teamStatsRow("Dif", profile, "runDiffPerGame", 1, true)}
+            ${teamStatsRow("Hits/G", profile, "hitsPerGame", 1)}
+            ${teamStatsRow("Hits Rec/G", profile, "hitsAllowedPerGame", 1)}
             ${teamStatsRow("Over %", profile, "overRate", 0, false, true)}
           </tbody>
         </table>

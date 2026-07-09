@@ -973,7 +973,7 @@ function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviati
   return {
     name: team?.name || "Equipo N/D",
     abbreviation: abbreviation || teamAbbrev(team?.name || ""),
-    logo: team?.id ? `https://www.mlbstatic.com/team-logos/${team.id}.svg` : logo,
+    logo: team?.id ? mlbTeamLogoUrl(team.id) : logo,
     role,
     splits,
   };
@@ -1191,6 +1191,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
   if (espnPitcher) {
     return {
       ...espnPitcher,
+      mlbId: mlbProbable?.id || null,
+      headshot: mlbProbable?.id ? mlbPitcherHeadshotUrl(mlbProbable.id) : espnPitcher.headshot,
       era: fallback(espnPitcher.era, mlbPitcher?.era || LEAGUE.era),
       whip: mlbPitcher?.whip || null,
       innings: mlbPitcher?.innings || null,
@@ -1218,9 +1220,10 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
   if (mlbProbable || mlbPitcher) {
     return {
       id: mlbProbable?.id || null,
+      mlbId: mlbProbable?.id || null,
       name: mlbProbable?.fullName || "Pitcher N/D",
       shortName: mlbProbable?.fullName || "Pitcher N/D",
-      headshot: "",
+      headshot: mlbProbable?.id ? mlbPitcherHeadshotUrl(mlbProbable.id) : "",
       jersey: "",
       position: "SP",
       record: "",
@@ -1422,8 +1425,8 @@ function teamStatsRow(label, profile, key, digits = 1, signed = false, pct = fal
 function renderPitchers(projection) {
   const away = projection.pitchers.away;
   const home = projection.pitchers.home;
-  const awayTeam = projection.game.teams.away.team.name;
-  const homeTeam = projection.game.teams.home.team.name;
+  const awayTeam = projection.game.teams.away.team;
+  const homeTeam = projection.game.teams.home.team;
 
   els.pitcherGrid.innerHTML = `
     <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-panel">
@@ -1470,9 +1473,10 @@ function renderPitchers(projection) {
   `;
 }
 
-function teamPitcherSide(align, pitcher, teamName) {
+function teamPitcherSide(align, pitcher, team) {
   const isRight = align === "right";
   const flexDirection = isRight ? "flex-row-reverse text-right" : "";
+  const teamName = typeof team === "string" ? team : team?.name || "";
   const pitcherName = pitcher?.name || "Abridor N/D";
   const throws = pitcher?.throws ? `${pitcher.throws}, ` : "";
   const jersey = pitcher?.jersey ? `#${pitcher.jersey}` : "N/D";
@@ -1480,7 +1484,7 @@ function teamPitcherSide(align, pitcher, teamName) {
   return `
     <div class="min-w-0">
       <div class="flex items-center gap-2 ${flexDirection}">
-        ${teamLogo(pitcher, teamName)}
+        ${teamLogo(team, pitcher)}
         <span class="text-xs font-semibold uppercase text-slate-600">${escapeHtml(pitcher?.teamAbbreviation || teamAbbrev(teamName))}</span>
       </div>
       <div class="mt-6 ${isRight ? "text-right" : ""}">
@@ -1492,8 +1496,9 @@ function teamPitcherSide(align, pitcher, teamName) {
 }
 
 function pitcherHeadshot(pitcher, align) {
-  if (pitcher?.headshot) {
-    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 bg-white object-cover img-smooth ${align === "left" ? "-mr-1" : "-ml-1"}" loading="lazy" />`;
+  const headshot = pitcherHeadshotUrl(pitcher);
+  if (headshot) {
+    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 bg-white object-cover img-smooth ${align === "left" ? "-mr-1" : "-ml-1"}" loading="lazy" />`;
   }
 
   return `
@@ -1528,12 +1533,14 @@ function pitcherTableRow(pitcher) {
   `;
 }
 
-function teamLogo(pitcher, teamName) {
-  if (pitcher?.teamLogo) {
-    return `<img src="${escapeHtml(pitcher.teamLogo)}" alt="${escapeHtml(teamName)}" class="h-5 w-5 object-contain img-crisp" loading="lazy" />`;
+function teamLogo(team, pitcher) {
+  const teamName = typeof team === "string" ? team : team?.name || pitcher?.team || "";
+  const logo = typeof team === "object" && team?.id ? mlbTeamLogoUrl(team.id) : pitcher?.teamLogo;
+  if (logo) {
+    return `<img src="${escapeHtml(logo)}" alt="${escapeHtml(teamName)}" class="h-6 w-6 object-contain img-smooth" loading="lazy" />`;
   }
 
-  return `<span class="flex h-5 w-5 items-center justify-center text-xs font-black text-slate-700">${escapeHtml(teamAbbrev(teamName).slice(0, 1))}</span>`;
+  return `<span class="flex h-6 w-6 items-center justify-center text-xs font-black text-slate-700">${escapeHtml(teamAbbrev(teamName).slice(0, 1))}</span>`;
 }
 
 function renderResults(projection) {
@@ -1988,8 +1995,9 @@ function pitcherModelLine(pitcher) {
 }
 
 function pitcherImage(pitcher) {
-  if (pitcher.headshot) {
-    return `<img src="${escapeHtml(pitcher.headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 bg-white object-cover img-smooth" loading="lazy" />`;
+  const headshot = pitcherHeadshotUrl(pitcher);
+  if (headshot) {
+    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 bg-white object-cover img-smooth" loading="lazy" />`;
   }
 
   return `
@@ -2047,6 +2055,20 @@ function teamAbbrev(name) {
     .join("")
     .slice(0, 3)
     .toUpperCase();
+}
+
+function mlbTeamLogoUrl(teamId) {
+  return `https://www.mlbstatic.com/team-logos/${teamId}.svg`;
+}
+
+function mlbPitcherHeadshotUrl(playerId) {
+  return `https://img.mlbstatic.com/mlb-photos/image/upload/w_240,q_auto:best/v1/people/${playerId}/headshot/67/current`;
+}
+
+function pitcherHeadshotUrl(pitcher) {
+  const playerId = pitcher?.mlbId || (pitcher?.source !== "ESPN" ? pitcher?.id : null);
+  if (playerId) return mlbPitcherHeadshotUrl(playerId);
+  return pitcher?.headshot || "";
 }
 
 function escapeHtml(value) {

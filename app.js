@@ -5,6 +5,7 @@ const MAX_CALIBRATION_HISTORY = 240;
 const MAX_TEAM_CACHE = 40;
 const MAX_PITCHER_CACHE = 140;
 const MAX_RECENT_CONTEXT_CACHE = 90;
+const MAX_LOCATION_SPLIT_CACHE = 60;
 const LEAGUE = {
   runsPerGame: 4.45,
   hitsPerGame: 8.25,
@@ -33,6 +34,7 @@ const state = {
   teamStats: new Map(),
   pitcherStats: new Map(),
   recentContexts: new Map(),
+  locationSplits: new Map(),
   isCalibrating: false,
 };
 
@@ -45,6 +47,7 @@ const els = {
   matchupHeader: document.querySelector("#matchupHeader"),
   statusBox: document.querySelector("#statusBox"),
   summaryGrid: document.querySelector("#summaryGrid"),
+  teamSplitGrid: document.querySelector("#teamSplitGrid"),
   pitcherGrid: document.querySelector("#pitcherGrid"),
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
@@ -118,13 +121,15 @@ async function compareSelectedGame() {
     const espnPitchers = extractEspnPitchers(espnEvent);
     const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
     const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent] = await Promise.all([
+    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, awayLocationSplits, homeLocationSplits] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
       getPitcherStats(game.teams.home.probablePitcher?.id, season),
       getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
       getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
+      getTeamLocationSplits(away.id, referenceDate),
+      getTeamLocationSplits(home.id, referenceDate),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
@@ -137,6 +142,8 @@ async function compareSelectedGame() {
       homePitcher,
       awayRecent,
       homeRecent,
+      awayLocationSplits,
+      homeLocationSplits,
       espnEvent,
     });
 
@@ -157,7 +164,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, awayLocationSplits, homeLocationSplits, espnEvent }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
@@ -166,6 +173,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const odds = extractEspnOdds(espnEvent);
   const weather = extractEspnWeather(espnEvent);
   const espnRecords = extractEspnTeamRecords(espnEvent);
+  const espnTeams = extractEspnTeams(espnEvent);
   awayStats = { ...awayStats, ...espnRecords.away };
   homeStats = { ...homeStats, ...espnRecords.home };
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
@@ -470,6 +478,26 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     pitchers: {
       away: awayPitcher,
       home: homePitcher,
+    },
+    teamProfiles: {
+      away: buildTeamSplitProfile({
+        team: awayTeam,
+        teamStats: awayStats,
+        recentContext: awayRecent,
+        locationSplits: awayLocationSplits,
+        logo: espnTeams.away?.logo,
+        abbreviation: espnTeams.away?.abbreviation,
+        role: "Visitante",
+      }),
+      home: buildTeamSplitProfile({
+        team: homeTeam,
+        teamStats: homeStats,
+        recentContext: homeRecent,
+        locationSplits: homeLocationSplits,
+        logo: espnTeams.home?.logo,
+        abbreviation: espnTeams.home?.abbreviation,
+        role: "Local",
+      }),
     },
     model: {
       awayPitcherMetrics,
@@ -838,6 +866,35 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
   }
 }
 
+async function getTeamLocationSplits(teamId, referenceDate) {
+  const cacheKey = `${teamId}-${referenceDate}`;
+  if (state.locationSplits.has(cacheKey)) return state.locationSplits.get(cacheKey);
+
+  try {
+    const season = String(referenceDate || "").slice(0, 4) || String(new Date().getFullYear());
+    const start = `${season}-03-01`;
+    const end = addDays(referenceDate, -1);
+    const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
+    const games = (schedule.dates || [])
+      .flatMap((date) => date.games || [])
+      .filter((game) => game.status?.abstractGameState === "Final")
+      .map((game) => parseRecentTeamGame(game, null, teamId))
+      .filter(Boolean);
+
+    const splits = {
+      all: summarizeTeamSplit(games),
+      home: summarizeTeamSplit(games.filter((game) => game.isHome)),
+      away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
+    };
+    setLimitedMapValue(state.locationSplits, cacheKey, splits, MAX_LOCATION_SPLIT_CACHE);
+    return splits;
+  } catch {
+    const fallbackSplits = null;
+    setLimitedMapValue(state.locationSplits, cacheKey, fallbackSplits, MAX_LOCATION_SPLIT_CACHE);
+    return fallbackSplits;
+  }
+}
+
 async function getActivePitchers(teamId, probablePitcherId) {
   try {
     const data = await fetchJson(`${MLB_BASE}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=season,group=pitching))`);
@@ -940,6 +997,75 @@ function aggregateRecentGames(games) {
     hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
     overRate: games.filter((game) => game.over).length / count,
   };
+}
+
+function buildTeamSplitProfile({ team, teamStats = {}, recentContext = {}, locationSplits = null, logo = "", abbreviation = "", role = "" }) {
+  const games = recentContext?.games || [];
+  const fallbackSplits = {
+    all: summarizeTeamSplit(games, teamStats),
+    home: summarizeTeamSplit(games.filter((game) => game.isHome)),
+    away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
+  };
+  const splits = locationSplits || fallbackSplits;
+  const records = {
+    all: teamStats.overallRecord || recordFromSplit(splits.all),
+    home: teamStats.homeRecord || recordFromSplit(splits.home),
+    away: teamStats.awayRecord || recordFromSplit(splits.away),
+  };
+
+  return {
+    name: team?.name || "Equipo N/D",
+    abbreviation: abbreviation || teamAbbrev(team?.name || ""),
+    logo: logo || (team?.id ? `https://www.mlbstatic.com/team-logos/${team.id}.svg` : ""),
+    role,
+    records,
+    splits,
+  };
+}
+
+function summarizeTeamSplit(games, seasonFallback = null) {
+  const count = games.length;
+  if (!count) {
+    return {
+      games: 0,
+      wins: null,
+      losses: null,
+      winRate: null,
+      results: [],
+      runsForPerGame: Number.isFinite(seasonFallback?.runsPerGame) ? seasonFallback.runsPerGame : null,
+      runsAllowedPerGame: Number.isFinite(seasonFallback?.runsAllowedPerGame) ? seasonFallback.runsAllowedPerGame : null,
+      runDiffPerGame:
+        Number.isFinite(seasonFallback?.runsPerGame) && Number.isFinite(seasonFallback?.runsAllowedPerGame)
+          ? seasonFallback.runsPerGame - seasonFallback.runsAllowedPerGame
+          : null,
+      hitsPerGame: Number.isFinite(seasonFallback?.hitsPerGame) ? seasonFallback.hitsPerGame : null,
+      hitsAllowedPerGame: Number.isFinite(seasonFallback?.hitsAllowedPerGame) ? seasonFallback.hitsAllowedPerGame : null,
+      overRate: null,
+    };
+  }
+
+  const wins = games.filter((game) => game.win).length;
+  const runsForPerGame = average(games.map((game) => game.runsFor));
+  const runsAllowedPerGame = average(games.map((game) => game.runsAllowed));
+
+  return {
+    games: count,
+    wins,
+    losses: count - wins,
+    winRate: wins / count,
+    results: games.slice(-5).map((game) => (game.win ? "W" : "L")),
+    runsForPerGame,
+    runsAllowedPerGame,
+    runDiffPerGame: runsForPerGame - runsAllowedPerGame,
+    hitsPerGame: average(games.map((game) => game.hits)),
+    hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
+    overRate: games.filter((game) => game.over).length / count,
+  };
+}
+
+function recordFromSplit(split) {
+  if (!split?.games || !Number.isFinite(split.wins) || !Number.isFinite(split.losses)) return null;
+  return { wins: split.wins, losses: split.losses, pct: split.games ? split.wins / split.games : 0.5 };
 }
 
 function aggregateBullpenGames(bullpenGames, referenceDate, relieversAvailable) {
@@ -1284,6 +1410,97 @@ function renderSummary(projection) {
       `
     )
     .join("");
+
+  renderTeamSplits(projection);
+}
+
+function renderTeamSplits(projection) {
+  if (!els.teamSplitGrid) return;
+
+  const profiles = [projection.teamProfiles?.away, projection.teamProfiles?.home].filter(Boolean);
+  if (!profiles.length) {
+    els.teamSplitGrid.innerHTML = "";
+    return;
+  }
+
+  els.teamSplitGrid.innerHTML = profiles.map(teamSplitCard).join("");
+}
+
+function teamSplitCard(profile) {
+  return `
+    <article class="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div class="flex items-center gap-3 bg-slate-800 px-4 py-3 text-white">
+        <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-white p-1">
+          <img src="${escapeHtml(profile.logo)}" alt="${escapeHtml(profile.name)}" class="h-full w-full object-contain img-crisp" loading="lazy" />
+        </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="truncate text-sm font-black">${escapeHtml(profile.name)}</span>
+            <span class="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-black uppercase">${escapeHtml(profile.role)}</span>
+          </div>
+          <p class="mt-1 text-xs font-bold text-slate-100">USA - MLB</p>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto p-2">
+        <table class="w-full min-w-[300px] text-center text-xs">
+          <thead class="text-[11px] font-black text-slate-600">
+            <tr>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Forma</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Resultados</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Win %</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${teamFormRow("All", profile.splits.all, profile.records.all)}
+            ${teamFormRow("Home", profile.splits.home, profile.records.home)}
+            ${teamFormRow("Away", profile.splits.away, profile.records.away)}
+          </tbody>
+        </table>
+
+        <table class="mt-3 w-full min-w-[300px] text-center text-xs">
+          <thead class="text-[11px] font-black text-slate-600">
+            <tr>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Stats</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Overall</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Home</th>
+              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Away</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${teamStatsRow("Runs / G", profile, "runsForPerGame", 1)}
+            ${teamStatsRow("RA / G", profile, "runsAllowedPerGame", 1)}
+            ${teamStatsRow("Diff", profile, "runDiffPerGame", 1, true)}
+            ${teamStatsRow("Hits / G", profile, "hitsPerGame", 1)}
+            ${teamStatsRow("HA / G", profile, "hitsAllowedPerGame", 1)}
+            ${teamStatsRow("Over %", profile, "overRate", 0, false, true)}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function teamFormRow(label, split, record) {
+  const pct = Number.isFinite(record?.pct) ? record.pct : split?.winRate;
+  return `
+    <tr>
+      <td class="border border-slate-200 px-2 py-2 font-semibold text-slate-700">${label}</td>
+      <td class="border border-slate-200 px-2 py-2">${resultBadges(split?.results || [])}</td>
+      <td class="border border-slate-200 px-2 py-2">${winPctBadge(pct)}</td>
+    </tr>
+  `;
+}
+
+function teamStatsRow(label, profile, key, digits = 1, signed = false, pct = false) {
+  return `
+    <tr>
+      <td class="border border-slate-200 px-2 py-1.5 font-semibold text-slate-600">${label}</td>
+      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.all?.[key], digits, signed, pct)}</td>
+      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.home?.[key], digits, signed, pct)}</td>
+      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.away?.[key], digits, signed, pct)}</td>
+    </tr>
+  `;
 }
 
 function renderPitchers(projection) {
@@ -1431,6 +1648,7 @@ function renderResults(projection) {
 
 function clearResults(clearHeader = true) {
   els.summaryGrid.innerHTML = "";
+  if (els.teamSplitGrid) els.teamSplitGrid.innerHTML = "";
   els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-semibold text-slate-500 shadow-panel">Compara un partido para ver los abridores y sus estadisticas.</div>`;
   els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-500">Aún no hay comparación.</td></tr>`;
   els.sourceBadge.textContent = "Sin datos";
@@ -1532,6 +1750,20 @@ function extractEspnTeamRecords(event) {
       overallRecord: parseRecord(records.find((record) => record.type === "total" || record.name === "overall")?.summary),
       homeRecord: parseRecord(records.find((record) => record.type === "home" || record.name === "Home")?.summary),
       awayRecord: parseRecord(records.find((record) => record.type === "road" || record.name === "Road")?.summary),
+    };
+  });
+  return result;
+}
+
+function extractEspnTeams(event) {
+  const result = { away: {}, home: {} };
+  const competitors = event?.competitions?.[0]?.competitors || [];
+  competitors.forEach((competitor) => {
+    const side = competitor.homeAway;
+    if (side !== "away" && side !== "home") return;
+    result[side] = {
+      abbreviation: competitor.team?.abbreviation || "",
+      logo: competitor.team?.logo || "",
     };
   });
   return result;
@@ -1860,6 +2092,33 @@ function formatRecord(pitcher) {
 
 function formatStat(value, digits = 1) {
   return Number.isFinite(value) ? value.toFixed(digits) : "N/D";
+}
+
+function formatSplitValue(value, digits = 1, signed = false, pct = false) {
+  if (!Number.isFinite(value)) return "N/D";
+  if (pct) return `${Math.round(value * 100)}%`;
+  const fixed = value.toFixed(digits);
+  return signed && value > 0 ? `+${fixed}` : fixed;
+}
+
+function resultBadges(results) {
+  if (!results.length) return `<span class="font-semibold text-slate-400">N/D</span>`;
+
+  return results
+    .map((result) => {
+      const tone = result === "W" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700";
+      return `<span class="mx-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-[11px] font-black ${tone}">${result}</span>`;
+    })
+    .join("");
+}
+
+function winPctBadge(value) {
+  if (!Number.isFinite(value)) {
+    return `<span class="inline-flex rounded-md bg-slate-100 px-2 py-1 text-xs font-black text-slate-500">N/D</span>`;
+  }
+
+  const tone = value >= 0.55 ? "bg-emerald-100 text-emerald-800" : value >= 0.45 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800";
+  return `<span class="inline-flex rounded-md px-2 py-1 text-xs font-black ${tone}">${Math.round(value * 100)}%</span>`;
 }
 
 function formatNullable(value) {

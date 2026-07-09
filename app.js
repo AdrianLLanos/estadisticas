@@ -45,7 +45,6 @@ const els = {
   matchupHeader: document.querySelector("#matchupHeader"),
   statusBox: document.querySelector("#statusBox"),
   summaryGrid: document.querySelector("#summaryGrid"),
-  teamSplitGrid: document.querySelector("#teamSplitGrid"),
   pitcherGrid: document.querySelector("#pitcherGrid"),
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
@@ -488,10 +487,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     pitchers: {
       away: awayPitcher,
       home: homePitcher,
-    },
-    teamProfiles: {
-      away: awayTeamProfile,
-      home: homeTeamProfile,
     },
     model: {
       awayPitcherMetrics,
@@ -1368,71 +1363,6 @@ function renderSummary(projection) {
       `
     )
     .join("");
-
-  renderTeamSplits(projection);
-}
-
-function renderTeamSplits(projection) {
-  if (!els.teamSplitGrid) return;
-
-  const profiles = [projection.teamProfiles?.away, projection.teamProfiles?.home].filter(Boolean);
-  if (!profiles.length) {
-    els.teamSplitGrid.innerHTML = "";
-    return;
-  }
-
-  els.teamSplitGrid.innerHTML = profiles.map(teamSplitCard).join("");
-}
-
-function teamSplitCard(profile) {
-  return `
-    <article class="overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div class="flex items-center gap-3 bg-slate-800 px-4 py-3 text-white">
-        <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-white p-1">
-          <img src="${escapeHtml(profile.logo)}" alt="${escapeHtml(profile.name)}" class="h-full w-full object-contain img-smooth" loading="lazy" />
-        </div>
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <span class="truncate text-sm font-black">${escapeHtml(profile.name)}</span>
-            <span class="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-black uppercase">${escapeHtml(profile.role)}</span>
-          </div>
-          <p class="mt-1 text-xs font-bold text-slate-100">USA - MLB</p>
-        </div>
-      </div>
-
-      <div class="overflow-x-auto p-2">
-        <table class="w-full min-w-[300px] text-center text-xs">
-          <thead class="text-[11px] font-black text-slate-600">
-            <tr>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Stats</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">General</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Local</th>
-              <th class="border border-slate-200 bg-slate-50 px-2 py-2">Visita</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${teamStatsRow("Carr/G", profile, "runsForPerGame", 1)}
-            ${teamStatsRow("Rec/G", profile, "runsAllowedPerGame", 1)}
-            ${teamStatsRow("Dif", profile, "runDiffPerGame", 1, true)}
-            ${teamStatsRow("Hits/G", profile, "hitsPerGame", 1)}
-            ${teamStatsRow("Hits Rec/G", profile, "hitsAllowedPerGame", 1)}
-            ${teamStatsRow("Over %", profile, "overRate", 0, false, true)}
-          </tbody>
-        </table>
-      </div>
-    </article>
-  `;
-}
-
-function teamStatsRow(label, profile, key, digits = 1, signed = false, pct = false) {
-  return `
-    <tr>
-      <td class="border border-slate-200 px-2 py-1.5 font-semibold text-slate-600">${label}</td>
-      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.all?.[key], digits, signed, pct)}</td>
-      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.home?.[key], digits, signed, pct)}</td>
-      <td class="border border-slate-200 px-2 py-1.5 font-bold text-slate-950">${formatSplitValue(profile.splits.away?.[key], digits, signed, pct)}</td>
-    </tr>
-  `;
 }
 
 function renderPitchers(projection) {
@@ -1584,7 +1514,6 @@ function renderResults(projection) {
 
 function clearResults(clearHeader = true) {
   els.summaryGrid.innerHTML = "";
-  if (els.teamSplitGrid) els.teamSplitGrid.innerHTML = "";
   els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-semibold text-slate-500 shadow-panel">Compara un partido para ver los abridores y sus estadisticas.</div>`;
   els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-500">Aún no hay comparación.</td></tr>`;
   els.sourceBadge.textContent = "Sin datos";
@@ -2029,13 +1958,6 @@ function formatRecord(pitcher) {
 
 function formatStat(value, digits = 1) {
   return Number.isFinite(value) ? value.toFixed(digits) : "N/D";
-}
-
-function formatSplitValue(value, digits = 1, signed = false, pct = false) {
-  if (!Number.isFinite(value)) return "N/D";
-  if (pct) return `${Math.round(value * 100)}%`;
-  const fixed = value.toFixed(digits);
-  return signed && value > 0 ? `+${fixed}` : fixed;
 }
 
 function formatNullable(value) {

@@ -196,29 +196,31 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const homeLocalia = calcularVentajaLocalia(homeStats, homeRecent, true);
   const awayMatchup = calcularMatchup(awayOffense, homePitcherMetrics, homeBullpen, awayForm);
   const homeMatchup = calcularMatchup(homeOffense, awayPitcherMetrics, awayBullpen, homeForm);
+  const awaySplitBaseRuns = calcularBaseCarrerasPorSplit({
+    offenseSplit: awayTeamProfile.splits.away,
+    defenseSplit: homeTeamProfile.splits.home,
+    offenseFallbackSplit: awayTeamProfile.splits.all,
+    defenseFallbackSplit: homeTeamProfile.splits.all,
+  });
+  const homeSplitBaseRuns = calcularBaseCarrerasPorSplit({
+    offenseSplit: homeTeamProfile.splits.home,
+    defenseSplit: awayTeamProfile.splits.away,
+    offenseFallbackSplit: homeTeamProfile.splits.all,
+    defenseFallbackSplit: awayTeamProfile.splits.all,
+  });
   const awayRunsBase = proyectarCarrerasEquipo({
-    teamStats: awayStats,
-    opponentStats: homeStats,
-    offense: awayOffense,
+    splitBaseRuns: awaySplitBaseRuns,
     opponentPitcher: homePitcherMetrics,
     opponentBullpen: homeBullpen,
     recentForm: awayForm,
-    opponentRecentForm: homeForm,
-    localia: awayLocalia,
     matchup: awayMatchup,
-    isHome: false,
   });
   const homeRunsBase = proyectarCarrerasEquipo({
-    teamStats: homeStats,
-    opponentStats: awayStats,
-    offense: homeOffense,
+    splitBaseRuns: homeSplitBaseRuns,
     opponentPitcher: awayPitcherMetrics,
     opponentBullpen: awayBullpen,
     recentForm: homeForm,
-    opponentRecentForm: awayForm,
-    localia: homeLocalia,
     matchup: homeMatchup,
-    isHome: true,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
   const awayRuns = awayRunsBase + weatherAdjustment / 2;
@@ -705,20 +707,22 @@ function calcularMatchup(offense, opponentPitcher, opponentBullpen, recentForm) 
   return { score: clamp(score, 0, 1), pitcherWeakness, bullpenWeakness, label: scoreLabel(score) };
 }
 
-function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPitcher, opponentBullpen, recentForm, opponentRecentForm, localia, matchup, isHome }) {
-  const seasonOffense = fallback(teamStats?.runsPerGame, LEAGUE.runsPerGame);
-  const recentOffense = fallback(recentForm?.runsFor10, LEAGUE.runsPerGame);
-  // 75% weight on recent 10 games, 25% weight on season averages
-  const teamOffenseRPG = recentOffense * 0.75 + seasonOffense * 0.25;
+function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallbackSplit, defenseFallbackSplit }) {
+  const offenseRuns = firstFinite(
+    offenseSplit?.runsForPerGame,
+    offenseFallbackSplit?.runsForPerGame,
+    LEAGUE.runsPerGame
+  );
+  const defenseRunsAllowed = firstFinite(
+    defenseSplit?.runsAllowedPerGame,
+    defenseFallbackSplit?.runsAllowedPerGame,
+    LEAGUE.runsAllowedPerGame
+  );
 
-  const seasonDefense = fallback(opponentStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame);
-  const recentDefense = fallback(opponentRecentForm?.runsAllowed10, LEAGUE.runsAllowedPerGame);
-  // 75% weight on recent 10 games, 25% weight on season averages
-  const opponentDefenseRPG = recentDefense * 0.75 + seasonDefense * 0.25;
-  
-  // Base expectation combining team offense and opponent defense relative to league average
-  const baseExpectedRuns = (teamOffenseRPG * opponentDefenseRPG) / LEAGUE.runsPerGame;
+  return clamp((offenseRuns + defenseRunsAllowed) / 2, 2.0, 8.5);
+}
 
+function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup }) {
   // Pitcher factor: starting pitcher ERA relative to league average and their score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
   const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.30;
@@ -735,11 +739,8 @@ function proyectarCarrerasEquipo({ teamStats, opponentStats, offense, opponentPi
   // Matchup factor
   const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.20;
 
-  // Home/Away field advantage factor
-  const localiaFactor = localia?.score ? localia.score / (isHome ? 0.53 : 0.47) : 1.0;
-
-  // Sabermetric multiplicative projection
-  let raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor * localiaFactor;
+  const baseExpectedRuns = fallback(splitBaseRuns, LEAGUE.runsPerGame);
+  const raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor;
 
   return clamp(raw, 2.0, 8.5);
 }
@@ -817,15 +818,16 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
 
   try {
     const end = addDays(referenceDate, -1);
-    const start = addDays(referenceDate, -24);
+    const start = addDays(referenceDate, -90);
     const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
-    const games = (schedule.dates || [])
+    const finalGames = (schedule.dates || [])
       .flatMap((date) => date.games || [])
-      .filter((game) => game.status?.abstractGameState === "Final")
-      .slice(-10);
+      .filter((game) => game.status?.abstractGameState === "Final");
+    const games = finalGames.slice(-10);
     const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
     const parsedGames = [];
     const bullpenGames = [];
+    const splitParsedGames = finalGames.map((game) => parseRecentTeamGame(game, null, teamId)).filter(Boolean);
 
     games.forEach((game, index) => {
       const boxscore = boxscores[index].status === "fulfilled" ? boxscores[index].value : null;
@@ -838,6 +840,11 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
     const roster = await getActivePitchers(teamId, probablePitcherId);
     const context = {
       games: parsedGames,
+      splitGames: {
+        all: splitParsedGames.slice(-10),
+        home: splitParsedGames.filter((game) => game.isHome).slice(-10),
+        away: splitParsedGames.filter((game) => !game.isHome).slice(-10),
+      },
       last10: aggregateRecentGames(parsedGames),
       bullpen: aggregateBullpenGames(bullpenGames, referenceDate, roster.relieversAvailable),
       homeWinRate: locationWinRate(parsedGames, true),
@@ -848,6 +855,11 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
   } catch {
     const neutral = {
       games: [],
+      splitGames: {
+        all: [],
+        home: [],
+        away: [],
+      },
       last10: aggregateRecentGames([]),
       bullpen: aggregateBullpenGames([], referenceDate, 7),
       homeWinRate: 0.5,
@@ -964,10 +976,11 @@ function aggregateRecentGames(games) {
 
 function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviation = "", role = "" }) {
   const games = recentContext?.games || [];
+  const splitGames = recentContext?.splitGames || {};
   const splits = {
-    all: summarizeTeamSplit(games),
-    home: summarizeTeamSplit(games.filter((game) => game.isHome)),
-    away: summarizeTeamSplit(games.filter((game) => !game.isHome)),
+    all: summarizeTeamSplit(splitGames.all || games),
+    home: summarizeTeamSplit(splitGames.home || games.filter((game) => game.isHome)),
+    away: summarizeTeamSplit(splitGames.away || games.filter((game) => !game.isHome)),
   };
 
   return {
@@ -2124,6 +2137,14 @@ function number(value) {
 function numberOr(value, fallbackValue) {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : fallbackValue;
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return NaN;
 }
 
 function ratePerNine(value, innings) {

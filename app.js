@@ -26,6 +26,39 @@ const LEAGUE = {
   totalRunsLine: 8.5,
 };
 
+const MLB_PARK_FACTORS = {
+  "Coors Field": 1.34,
+  "Fenway Park": 1.11,
+  "Great American Ball Park": 1.10,
+  "Oriole Park at Camden Yards": 1.05,
+  "Globe Life Field": 1.04,
+  "Dodger Stadium": 1.03,
+  "Citizens Bank Park": 1.03,
+  "Kauffman Stadium": 1.02,
+  "Wrigley Field": 1.01,
+  "Truist Park": 1.01,
+  "Angel Stadium": 1.00,
+  "Target Field": 1.00,
+  "Guaranteed Rate Field": 1.00,
+  "Rogers Centre": 0.99,
+  "Yankee Stadium": 0.99,
+  "Busch Stadium": 0.98,
+  "Minute Maid Park": 0.98,
+  "Nationals Park": 0.98,
+  "American Family Field": 0.97,
+  "Chase Field": 0.97,
+  "Progressive Field": 0.96,
+  "Comerica Park": 0.96,
+  "loanDepot park": 0.95,
+  "PNC Park": 0.95,
+  "Citi Field": 0.95,
+  "Petco Park": 0.94,
+  "T-Mobile Park": 0.92,
+  "Oracle Park": 0.91,
+  "Oakland Coliseum": 0.89,
+  "Tropicana Field": 0.89,
+};
+
 const state = {
   games: [],
   espnEvents: [],
@@ -185,8 +218,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   });
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
   const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
-  const awayOffense = calcularOfensivaEquipo(awayStats);
-  const homeOffense = calcularOfensivaEquipo(homeStats);
+  const awayOffense = calcularOfensivaEquipo(awayStats, homePitcherMetrics.hand);
+  const homeOffense = calcularOfensivaEquipo(homeStats, awayPitcherMetrics.hand);
   const awayForm = calcularFormaReciente(awayRecent);
   const homeForm = calcularFormaReciente(homeRecent);
   const awayBullpen = calcularBullpenAproximado(awayRecent?.bullpen);
@@ -222,11 +255,12 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     matchup: homeMatchup,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
-  const awayRuns = awayRunsBase + weatherAdjustment / 2;
-  const homeRuns = homeRunsBase + weatherAdjustment / 2;
+  const parkFactor = obtenerParkFactor(game);
+  const awayRuns = (awayRunsBase + weatherAdjustment / 2) * parkFactor;
+  const homeRuns = (homeRunsBase + weatherAdjustment / 2) * parkFactor;
   const totalRuns = calcularTotalCarreras(awayRuns, homeRuns);
-  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm, homeForm);
-  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm, awayForm);
+  const awayHits = proyectarHitsEquipo(awayStats, homeStats, homePitcherMetrics, awayForm, homeForm, homePitcherMetrics.hand);
+  const homeHits = proyectarHitsEquipo(homeStats, awayStats, awayPitcherMetrics, homeForm, awayForm, awayPitcherMetrics.hand);
   const totalHits = calcularHitsTotales(awayStats, homeStats, homePitcherMetrics, awayPitcherMetrics, awayForm, homeForm);
 
   // Run Poisson solver for hits (16.5 benchmark)
@@ -565,6 +599,7 @@ function calcularMetricasPitcher(pitcher = {}) {
   const recent = pitcher?.recentStarts || {};
   const recentRuns = Number.isFinite(recent.runsAllowedPerStart) ? recent.runsAllowedPerStart : LEAGUE.runsPerGame * 0.55;
   const recentHits = Number.isFinite(recent.hitsAllowedPerStart) ? recent.hitsAllowedPerStart : LEAGUE.hitsPerGame * 0.55;
+  const hand = String(pitcher?.pitchHand || pitcher?.throws || "R").toUpperCase().startsWith("L") ? "L" : "R";
   const metrics = {
     era: fallback(pitcher?.era, LEAGUE.era),
     whip: fallback(pitcher?.whip, LEAGUE.whip),
@@ -583,6 +618,7 @@ function calcularMetricasPitcher(pitcher = {}) {
     wins: numberOr(pitcher?.wins, 0),
     losses: numberOr(pitcher?.losses, 0),
     throws: pitcher?.throws || pitcher?.pitchHand || "",
+    hand,
     recentStarts: numberOr(recent.count, 0),
     recentRuns,
     recentHits,
@@ -601,11 +637,12 @@ function calcularMetricasPitcher(pitcher = {}) {
   return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
 
-function calcularOfensivaEquipo(team = {}) {
+function calcularOfensivaEquipo(team = {}, opponentHand = "R") {
+  const splitOps = opponentHand === "L" ? team.opsVsLeft : team.opsVsRight;
   const metrics = {
     runsPerGame: fallback(team.runsPerGame, LEAGUE.runsPerGame),
     hitsPerGame: fallback(team.hitsPerGame, LEAGUE.hitsPerGame),
-    ops: fallback(team.ops, LEAGUE.ops),
+    ops: fallback(splitOps, fallback(team.ops, LEAGUE.ops)),
     obp: fallback(team.obp, LEAGUE.obp),
     slg: fallback(team.slg, LEAGUE.slg),
     battingAverage: fallback(team.battingAverage, LEAGUE.battingAverage),
@@ -1067,37 +1104,60 @@ function summarizePitcherRecentStarts(splits) {
 async function getTeamStats(teamId) {
   if (state.teamStats.has(teamId)) return state.teamStats.get(teamId);
 
-  const data = await fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=season&group=hitting,pitching`);
-  const hitting = data.stats?.find((item) => item.group?.displayName === "hitting")?.splits?.[0]?.stat || {};
-  const pitching = data.stats?.find((item) => item.group?.displayName === "pitching")?.splits?.[0]?.stat || {};
-  const games = number(hitting.gamesPlayed) || number(pitching.gamesPlayed) || 1;
-  const innings = inningsToNumber(pitching.inningsPitched);
-  const pitchingGames = number(pitching.gamesPlayed) || games;
-  const earnedRuns = number(pitching.earnedRuns);
-  const allowedRuns = number(pitching.runs) || earnedRuns * 1.08;
+  try {
+    const [seasonData, splitLeftData, splitRightData] = await Promise.all([
+      fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=season&group=hitting,pitching`),
+      fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=statSplits&group=hitting&sitCodes=vl`),
+      fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=statSplits&group=hitting&sitCodes=vr`),
+    ]);
 
-  const normalized = {
-    games,
-    runsPerGame: number(hitting.runs) / games,
-    hitsPerGame: number(hitting.hits) / games,
-    battingAverage: number(hitting.avg),
-    obp: number(hitting.obp),
-    slg: number(hitting.slg),
-    ops: number(hitting.ops),
-    homeRunsPerGame: number(hitting.homeRuns) / games,
-    walksPerGame: number(hitting.baseOnBalls) / games,
-    strikeoutsPerGame: number(hitting.strikeOuts) / games,
-    runsAllowedPerGame: allowedRuns / pitchingGames,
-    hitsAllowedPerGame: number(pitching.hits) / pitchingGames,
-    walksAllowedPerGame: number(pitching.baseOnBalls) / pitchingGames,
-    homeRunsAllowedPerGame: number(pitching.homeRuns) / pitchingGames,
-    pitchingStrikeoutsPerGame: number(pitching.strikeOuts) / pitchingGames,
-    era: number(pitching.era) || (innings ? (earnedRuns * 9) / innings : LEAGUE.era),
-    whip: number(pitching.whip) || LEAGUE.whip,
-  };
+    const hitting = seasonData.stats?.find((item) => item.group?.displayName === "hitting")?.splits?.[0]?.stat || {};
+    const pitching = seasonData.stats?.find((item) => item.group?.displayName === "pitching")?.splits?.[0]?.stat || {};
+    const games = number(hitting.gamesPlayed) || number(pitching.gamesPlayed) || 1;
+    const innings = inningsToNumber(pitching.inningsPitched);
+    const pitchingGames = number(pitching.gamesPlayed) || games;
+    const earnedRuns = number(pitching.earnedRuns);
+    const allowedRuns = number(pitching.runs) || earnedRuns * 1.08;
+    const opsGeneral = number(hitting.ops) || LEAGUE.ops;
+    const opsVsLeft = number(splitLeftData.stats?.[0]?.splits?.[0]?.stat?.ops) || opsGeneral;
+    const opsVsRight = number(splitRightData.stats?.[0]?.splits?.[0]?.stat?.ops) || opsGeneral;
 
-  setLimitedMapValue(state.teamStats, teamId, normalized, MAX_TEAM_CACHE);
-  return normalized;
+    const normalized = {
+      games,
+      runsPerGame: number(hitting.runs) / games,
+      hitsPerGame: number(hitting.hits) / games,
+      battingAverage: number(hitting.avg),
+      obp: number(hitting.obp),
+      slg: number(hitting.slg),
+      ops: opsGeneral,
+      opsVsLeft,
+      opsVsRight,
+      homeRunsPerGame: number(hitting.homeRuns) / games,
+      walksPerGame: number(hitting.baseOnBalls) / games,
+      strikeoutsPerGame: number(hitting.strikeOuts) / games,
+      runsAllowedPerGame: allowedRuns / pitchingGames,
+      hitsAllowedPerGame: number(pitching.hits) / pitchingGames,
+      walksAllowedPerGame: number(pitching.baseOnBalls) / pitchingGames,
+      homeRunsAllowedPerGame: number(pitching.homeRuns) / pitchingGames,
+      pitchingStrikeoutsPerGame: number(pitching.strikeOuts) / pitchingGames,
+      era: number(pitching.era) || (innings ? (earnedRuns * 9) / innings : LEAGUE.era),
+      whip: number(pitching.whip) || LEAGUE.whip,
+    };
+
+    setLimitedMapValue(state.teamStats, teamId, normalized, MAX_TEAM_CACHE);
+    return normalized;
+  } catch {
+    const fallbackValue = {
+      ops: LEAGUE.ops,
+      opsVsLeft: LEAGUE.ops,
+      opsVsRight: LEAGUE.ops,
+      runsPerGame: LEAGUE.runsPerGame,
+      hitsPerGame: LEAGUE.hitsPerGame,
+      battingAverage: LEAGUE.battingAverage,
+    };
+    setLimitedMapValue(state.teamStats, teamId, fallbackValue, MAX_TEAM_CACHE);
+    return fallbackValue;
+  }
 }
 
 async function getPitcherStats(playerId, season = new Date().getFullYear()) {
@@ -1675,6 +1735,16 @@ function setStatus(message, tone = "neutral") {
   els.statusBox.textContent = message;
 }
 
+function obtenerParkFactor(game = {}) {
+  const venueName = game?.venue?.name || "Neutral";
+  const direct = MLB_PARK_FACTORS[venueName];
+  if (direct) return direct;
+
+  const normalizedName = String(venueName).toLowerCase();
+  const match = Object.entries(MLB_PARK_FACTORS).find(([name]) => name.toLowerCase() === normalizedName);
+  return match ? match[1] : 1.0;
+}
+
 function confidenceBadge(value) {
   const tone =
     value === "Alta"
@@ -1711,7 +1781,7 @@ function recomendacionTotal(totalRuns, line) {
   return "Total medio";
 }
 
-function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm, opponentRecentForm) {
+function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm, opponentRecentForm, opponentHand = "R") {
   const seasonHits = fallback(team?.hitsPerGame, LEAGUE.hitsPerGame);
   const recentHits = fallback(recentForm?.hits10, LEAGUE.hitsPerGame);
   // 75% weight on recent 10 games, 25% weight on season stats
@@ -1740,8 +1810,12 @@ function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm, oppone
   const teamBA = fallback(team?.battingAverage, LEAGUE.battingAverage);
   const baFactor = teamBA / LEAGUE.battingAverage;
 
+  // Platoon split adjustment for opposing pitcher hand
+  const splitFactor = opponentHand === "L" ? (fallback(team?.opsVsLeft, team?.ops) || LEAGUE.ops) / LEAGUE.ops : (fallback(team?.opsVsRight, team?.ops) || LEAGUE.ops) / LEAGUE.ops;
+  const platoonFactor = 1.0 + (splitFactor - 1.0) * 0.08;
+
   // Sabermetric multiplicative projection
-  let raw = baseExpectedHits * pitcherFactor * formFactor * baFactor;
+  let raw = baseExpectedHits * pitcherFactor * formFactor * baFactor * platoonFactor;
 
   return clamp(raw, 5.0, 12.0);
 }

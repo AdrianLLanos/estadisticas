@@ -26,38 +26,42 @@ const LEAGUE = {
   totalRunsLine: 8.5,
 };
 
-const MLB_PARK_FACTORS = {
-  "Coors Field": 1.34,
-  "Fenway Park": 1.11,
-  "Great American Ball Park": 1.10,
-  "Oriole Park at Camden Yards": 1.05,
-  "Globe Life Field": 1.04,
-  "Dodger Stadium": 1.03,
-  "Citizens Bank Park": 1.03,
-  "Kauffman Stadium": 1.02,
-  "Wrigley Field": 1.01,
-  "Truist Park": 1.01,
-  "Angel Stadium": 1.00,
-  "Target Field": 1.00,
-  "Guaranteed Rate Field": 1.00,
-  "Rogers Centre": 0.99,
-  "Yankee Stadium": 0.99,
-  "Busch Stadium": 0.98,
-  "Minute Maid Park": 0.98,
-  "Nationals Park": 0.98,
-  "American Family Field": 0.97,
-  "Chase Field": 0.97,
-  "Progressive Field": 0.96,
-  "Comerica Park": 0.96,
-  "loanDepot park": 0.95,
-  "PNC Park": 0.95,
-  "Citi Field": 0.95,
-  "Petco Park": 0.94,
-  "T-Mobile Park": 0.92,
-  "Oracle Park": 0.91,
-  "Oakland Coliseum": 0.89,
-  "Tropicana Field": 0.89,
+const MLB_STADIUMS = {
+  "Angel Stadium": { parkFactor: 1.00, stadiumType: "Neutral", elevation: 160, latitude: 33.8003, longitude: -117.8827 },
+  "Chase Field": { parkFactor: 1.04, stadiumType: "Hitter-friendly", elevation: 1086, latitude: 33.4457, longitude: -112.0667 },
+  "Oriole Park at Camden Yards": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 19, latitude: 39.2839, longitude: -76.6216 },
+  "Fenway Park": { parkFactor: 1.05, stadiumType: "Hitter-friendly", elevation: 20, latitude: 42.3467, longitude: -71.0972 },
+  "Wrigley Field": { parkFactor: 1.03, stadiumType: "Hitter-friendly", elevation: 594, latitude: 41.9484, longitude: -87.6553 },
+  "Great American Ball Park": { parkFactor: 1.04, stadiumType: "Hitter-friendly", elevation: 492, latitude: 39.0974, longitude: -84.5067 },
+  "Progressive Field": { parkFactor: 1.00, stadiumType: "Neutral", elevation: 660, latitude: 41.4962, longitude: -81.6852 },
+  "Coors Field": { parkFactor: 1.12, stadiumType: "Hitter-friendly", elevation: 5280, latitude: 39.7559, longitude: -104.9942 },
+  "Comerica Park": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 600, latitude: 42.3400, longitude: -83.0486 },
+  "Minute Maid Park": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 50, latitude: 29.7572, longitude: -95.3556 },
+  "Kauffman Stadium": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 750, latitude: 39.0517, longitude: -94.4803 },
+  "Dodger Stadium": { parkFactor: 0.98, stadiumType: "Pitcher-friendly", elevation: 515, latitude: 34.0739, longitude: -118.2400 },
+  "Nationals Park": { parkFactor: 1.01, stadiumType: "Neutral", elevation: 26, latitude: 38.8730, longitude: -77.0075 },
+  "Citi Field": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 28, latitude: 40.7571, longitude: -73.8458 },
+  "Sutter Health Park": { parkFactor: 1.01, stadiumType: "Neutral", elevation: 30, latitude: 38.5800, longitude: -121.4931 },
+  "PNC Park": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 720, latitude: 40.4468, longitude: -80.0058 },
+  "Petco Park": { parkFactor: 0.96, stadiumType: "Pitcher-friendly", elevation: 16, latitude: 32.7076, longitude: -117.1570 },
+  "T-Mobile Park": { parkFactor: 0.97, stadiumType: "Pitcher-friendly", elevation: 10, latitude: 47.5914, longitude: -122.3327 },
+  "Oracle Park": { parkFactor: 0.98, stadiumType: "Pitcher-friendly", elevation: 10, latitude: 37.7786, longitude: -122.3893 },
+  "Busch Stadium": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 465, latitude: 38.6226, longitude: -90.1928 },
+  "George M. Steinbrenner Field": { parkFactor: 1.01, stadiumType: "Neutral", elevation: 10, latitude: 27.9789, longitude: -82.6948 },
+  "Globe Life Field": { parkFactor: 1.00, stadiumType: "Neutral", elevation: 558, latitude: 32.7555, longitude: -97.0926 },
+  "Rogers Centre": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 270, latitude: 43.6414, longitude: -79.3894 },
+  "Target Field": { parkFactor: 1.00, stadiumType: "Neutral", elevation: 810, latitude: 44.9817, longitude: -93.2783 },
+  "Citizens Bank Park": { parkFactor: 1.04, stadiumType: "Hitter-friendly", elevation: 30, latitude: 39.9054, longitude: -75.1665 },
+  "Truist Park": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 1050, latitude: 33.8900, longitude: -84.4677 },
+  "Guaranteed Rate Field": { parkFactor: 1.00, stadiumType: "Neutral", elevation: 595, latitude: 41.8300, longitude: -87.6339 },
+  "loanDepot park": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 6, latitude: 25.7781, longitude: -80.2197 },
+  "Yankee Stadium": { parkFactor: 1.03, stadiumType: "Hitter-friendly", elevation: 28, latitude: 40.8296, longitude: -73.9262 },
+  "American Family Field": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 635, latitude: 43.0282, longitude: -87.9711 },
+  "Oakland Coliseum": { parkFactor: 0.89, stadiumType: "Pitcher-friendly", elevation: 20, latitude: 37.7502, longitude: -122.2005 },
+  "Tropicana Field": { parkFactor: 0.89, stadiumType: "Pitcher-friendly", elevation: 14, latitude: 27.7683, longitude: -82.6534 },
 };
+
+const MLB_PARK_FACTORS = Object.fromEntries(Object.entries(MLB_STADIUMS).map(([name, stadium]) => [name, stadium.parkFactor]));
 
 const state = {
   games: [],
@@ -149,19 +153,22 @@ async function compareSelectedGame() {
   try {
     const espnEvent = findEspnEvent(game);
     const espnPitchers = extractEspnPitchers(espnEvent);
+    const espnWeather = extractEspnWeather(espnEvent);
     const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
     const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent] = await Promise.all([
+    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, openMeteoWeather] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
       getPitcherStats(game.teams.home.probablePitcher?.id, season),
       getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
       getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
+      fetchOpenMeteoWeather(game.venue?.name, game.gameDate),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
     const homePitcher = mergePitcherSources(espnPitchers.home, homeMlbPitcher, game.teams.home.probablePitcher);
+    const weather = espnWeather || openMeteoWeather;
     const projection = buildProjection({
       game,
       awayStats,
@@ -171,6 +178,7 @@ async function compareSelectedGame() {
       awayRecent,
       homeRecent,
       espnEvent,
+      weather,
     });
 
     renderSummary(projection);
@@ -190,14 +198,13 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent, weather }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
   const homeName = shortName(homeTeam.name);
 
   const odds = extractEspnOdds(espnEvent);
-  const weather = extractEspnWeather(espnEvent);
   const espnRecords = extractEspnTeamRecords(espnEvent);
   const espnTeams = extractEspnTeams(espnEvent);
   awayStats = { ...awayStats, ...espnRecords.away };
@@ -1412,6 +1419,13 @@ function renderSummary(projection) {
     ["Handicap", projection.runLinePick, projection.confidence],
   ];
 
+  if (projection.weather) {
+    const weather = projection.weather;
+    const weatherLabel = `${weather.temperature ?? "N/D"}°C · ${weather.windSpeed ?? "N/D"} km/h · ${weather.humidity ?? "N/D"}%`;
+    const weatherMeta = `${weather.description || "Clima"}${weather.source ? ` · ${weather.source}` : ""}`;
+    cards.push(["Clima", weatherLabel, weatherMeta]);
+  }
+
   els.summaryGrid.innerHTML = cards
     .map(
       ([label, value, meta]) => `
@@ -1627,6 +1641,7 @@ function extractEspnWeather(event) {
     windDirection,
     humidity,
     link: weather.link?.href || "",
+    source: "ESPN",
   };
 }
 
@@ -1735,14 +1750,117 @@ function setStatus(message, tone = "neutral") {
   els.statusBox.textContent = message;
 }
 
-function obtenerParkFactor(game = {}) {
-  const venueName = game?.venue?.name || "Neutral";
-  const direct = MLB_PARK_FACTORS[venueName];
-  if (direct) return direct;
+function findStadiumInfo(venueName = "") {
+  const normalizedVenue = normalizeName(venueName || "");
+  if (MLB_STADIUMS[venueName]) return MLB_STADIUMS[venueName];
+  const entry = Object.entries(MLB_STADIUMS).find(([name]) => normalizeName(name) === normalizedVenue);
+  return entry ? entry[1] : null;
+}
 
-  const normalizedName = String(venueName).toLowerCase();
-  const match = Object.entries(MLB_PARK_FACTORS).find(([name]) => name.toLowerCase() === normalizedName);
-  return match ? match[1] : 1.0;
+async function fetchOpenMeteoWeather(venueName, gameDate) {
+  const stadium = findStadiumInfo(venueName);
+  if (!stadium?.latitude || !stadium?.longitude || !gameDate) return null;
+
+  try {
+    const dateUtc = new Date(gameDate);
+    const startDate = dateUtc.toISOString().slice(0, 10);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.latitude}&longitude=${stadium.longitude}&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,weathercode&start_date=${startDate}&end_date=${startDate}&timezone=UTC`;
+    const data = await fetchJson(url);
+    const weather = pickOpenMeteoWeather(data, dateUtc);
+    if (!weather) return null;
+
+    return {
+      temperature: weather.temperature,
+      highTemperature: weather.highTemperature,
+      lowTemperature: weather.lowTemperature,
+      description: weather.description,
+      windSpeed: weather.windSpeed,
+      humidity: weather.humidity,
+      link: "https://open-meteo.com/",
+      source: "Open-Meteo",
+      venue: venueName,
+      latitude: stadium.latitude,
+      longitude: stadium.longitude,
+    };
+  } catch (error) {
+    console.warn("Open-Meteo error:", error);
+    return null;
+  }
+}
+
+function pickOpenMeteoWeather(data, dateUtc) {
+  const times = data?.hourly?.time || [];
+  const temperatures = data?.hourly?.temperature_2m || [];
+  const humidities = data?.hourly?.relativehumidity_2m || [];
+  const windSpeeds = data?.hourly?.windspeed_10m || [];
+  const weatherCodes = data?.hourly?.weathercode || [];
+  if (!times.length || !temperatures.length || !humidities.length || !windSpeeds.length) return null;
+
+  const targetTime = dateUtc.toISOString().slice(0, 16) + ":00";
+  let index = times.indexOf(targetTime);
+  if (index < 0) {
+    const targetMs = dateUtc.getTime();
+    index = times.reduce((closest, _, i) => {
+      if (closest === -1) return i;
+      const currentMs = Date.parse(times[i]);
+      return Math.abs(currentMs - targetMs) < Math.abs(Date.parse(times[closest]) - targetMs) ? i : closest;
+    }, -1);
+  }
+  if (index < 0) return null;
+
+  const highTemperature = Math.max(...temperatures);
+  const lowTemperature = Math.min(...temperatures);
+  const code = weatherCodes[index];
+  return {
+    temperature: number(temperatures[index]),
+    highTemperature: number(highTemperature),
+    lowTemperature: number(lowTemperature),
+    windSpeed: number(windSpeeds[index]),
+    humidity: number(humidities[index]),
+    description: openMeteoWeatherCodeToDescription(code),
+  };
+}
+
+function openMeteoWeatherCodeToDescription(code) {
+  switch (Number(code)) {
+    case 0:
+      return "Cielo despejado";
+    case 1:
+    case 2:
+    case 3:
+      return "Parcialmente nublado";
+    case 45:
+    case 48:
+      return "Niebla";
+    case 51:
+    case 53:
+    case 55:
+      return "Lluvia ligera";
+    case 61:
+    case 63:
+    case 65:
+      return "Lluvia";
+    case 71:
+    case 73:
+    case 75:
+      return "Nieve";
+    case 80:
+    case 81:
+    case 82:
+      return "Chubascos";
+    case 95:
+    case 96:
+    case 99:
+      return "Tormenta eléctrica";
+    default:
+      return "Condiciones climáticas";
+  }
+}
+
+function obtenerParkFactor(game = {}) {
+  const venueName = game?.venue?.name || "";
+  const stadium = findStadiumInfo(venueName);
+  return stadium?.parkFactor ?? 1.0;
 }
 
 function confidenceBadge(value) {

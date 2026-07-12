@@ -1660,13 +1660,25 @@ function extractEspnWeather(event) {
   const weather = event?.weather;
   if (!weather) return null;
 
-  const temperature = number(weather.temperature);
-  const highTemperature = number(weather.highTemperature || weather.maxTemperature);
-  const lowTemperature = number(weather.lowTemperature);
+  let temperature = number(weather.temperature);
+  let highTemperature = number(weather.highTemperature || weather.maxTemperature);
+  let lowTemperature = number(weather.lowTemperature);
+  let windSpeed = number(weather.windSpeed || weather.wind?.speed);
   const description = weather.displayValue || weather.text || weather.shortPhrase || weather.longPhrase || "Clima disponible";
-  const windSpeed = number(weather.windSpeed || weather.wind?.speed);
   const windDirection = weather.wind?.direction || weather.wind?.dir || "";
   const humidity = number(weather.humidity);
+  const tempUnit = String(weather.temperatureUnit || weather.unit || weather.units?.temperature || "").toLowerCase();
+
+  const shouldConvertFromFahrenheit =
+    tempUnit.includes("f") ||
+    (tempUnit === "" && temperature > 50 && temperature <= 150);
+
+  if (shouldConvertFromFahrenheit) {
+    temperature = fahrenheitToCelsius(temperature);
+    highTemperature = fahrenheitToCelsius(highTemperature);
+    lowTemperature = fahrenheitToCelsius(lowTemperature);
+    windSpeed = mphToKmh(windSpeed);
+  }
 
   return {
     temperature,
@@ -1679,6 +1691,16 @@ function extractEspnWeather(event) {
     link: weather.link?.href || "",
     source: "ESPN",
   };
+}
+
+function fahrenheitToCelsius(value) {
+  if (!Number.isFinite(value)) return value;
+  return Number(((value - 32) * (5 / 9)).toFixed(1));
+}
+
+function mphToKmh(value) {
+  if (!Number.isFinite(value)) return value;
+  return Number((value * 1.60934).toFixed(1));
 }
 
 function calcularImpactoClima(weather) {

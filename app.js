@@ -168,7 +168,7 @@ async function compareSelectedGame() {
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
     const homePitcher = mergePitcherSources(espnPitchers.home, homeMlbPitcher, game.teams.home.probablePitcher);
-    const weather = espnWeather || openMeteoWeather;
+    const weather = openMeteoWeather || espnWeather;
     const projection = buildProjection({
       game,
       awayStats,
@@ -1421,22 +1421,58 @@ function renderSummary(projection) {
 
   if (projection.weather) {
     const weather = projection.weather;
-    const weatherLabel = `${weather.temperature ?? "N/D"}°C · ${weather.windSpeed ?? "N/D"} km/h · ${weather.humidity ?? "N/D"}%`;
-    const weatherMeta = `${weather.description || "Clima"}${weather.source ? ` · ${weather.source}` : ""}`;
-    cards.push(["Clima", weatherLabel, weatherMeta]);
+    const desc = translateWeatherDescription(weather.description || "Clima");
+    const icon = weatherIconFromDescription(desc);
+    const weatherLabel = `${icon} ${weather.temperature ?? "N/D"}°C`;
+    const weatherMeta = `${desc} · Viento ${weather.windSpeed ?? "N/D"} km/h · Humedad ${weather.humidity ?? "N/D"}%`;
+    cards.push(["Clima", weatherLabel, weatherMeta, getWeatherCardClasses(desc)]);
   }
 
   els.summaryGrid.innerHTML = cards
     .map(
-      ([label, value, meta]) => `
-        <article class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      ([label, value, meta, classes]) => `
+        <article class="${classes || "rounded-lg border border-slate-200 bg-slate-50 p-4"}">
           <p class="text-xs font-bold uppercase tracking-wide text-slate-500">${label}</p>
           <p class="mt-2 truncate text-2xl font-black text-slate-950">${value}</p>
-          <p class="mt-1 truncate text-sm font-semibold text-slate-500">${meta}</p>
+          <p class="mt-1 text-sm font-semibold text-slate-500">${meta}</p>
         </article>
       `
     )
     .join("");
+}
+
+function translateWeatherDescription(description) {
+  const desc = String(description || "").toLowerCase();
+  if (/tormenta|thunder|storm|rayos/.test(desc)) return "Tormentoso";
+  if (/lluvia|rain|showers|drizzle|chubascos/.test(desc)) return "Lluvioso";
+  if (/nieve|snow|sleet|granizo/.test(desc)) return "Nevado";
+  if (/nublado|cloudy|overcast/.test(desc)) return "Nublado";
+  if (/niebla|fog|mist/.test(desc)) return "Con niebla";
+  if (/soleado|sunny|clear/.test(desc)) return "Soleado";
+  if (/parcialmente|partly/.test(desc)) return "Parcialmente nublado";
+  return description.charAt(0).toUpperCase() + description.slice(1);
+}
+
+function weatherIconFromDescription(description) {
+  const desc = String(description || "").toLowerCase();
+  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "⛈️";
+  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "🌧️";
+  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "🌨️";
+  if (/nublado|cloudy|overcast/.test(desc)) return "☁️";
+  if (/niebla|fog|mist/.test(desc)) return "🌫️";
+  if (/soleado|sunny|clear/.test(desc)) return "☀️";
+  return "⛅";
+}
+
+function getWeatherCardClasses(description) {
+  const desc = String(description || "").toLowerCase();
+  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "rounded-lg border border-slate-200 bg-rose-100 p-4 shadow-sm";
+  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "rounded-lg border border-slate-200 bg-sky-100 p-4 shadow-sm";
+  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "rounded-lg border border-slate-200 bg-indigo-100 p-4 shadow-sm";
+  if (/nublado|cloudy|overcast/.test(desc)) return "rounded-lg border border-slate-200 bg-slate-100 p-4 shadow-sm";
+  if (/niebla|fog|mist/.test(desc)) return "rounded-lg border border-slate-200 bg-amber-100 p-4 shadow-sm";
+  if (/soleado|sunny|clear/.test(desc)) return "rounded-lg border border-slate-200 bg-emerald-100 p-4 shadow-sm";
+  return "rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm";
 }
 
 function renderPitchers(projection) {

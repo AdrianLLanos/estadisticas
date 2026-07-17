@@ -163,6 +163,8 @@ const els = {
   calibrationBadge: document.querySelector("#calibrationBadge"),
   themeToggleBtn: document.querySelector("#themeToggleBtn"),
   themeToggleIcon: document.querySelector("#themeToggleIcon"),
+  readingModeBtn: document.querySelector("#readingModeBtn"),
+  readingModeIcon: document.querySelector("#readingModeIcon"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -173,6 +175,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (els.themeToggleBtn) {
     els.themeToggleBtn.addEventListener("click", toggleTheme);
     updateThemeUI();
+  }
+
+  if (els.readingModeBtn) {
+    els.readingModeBtn.addEventListener("click", toggleReadingMode);
+    updateReadingModeUI();
   }
   
   if (window.lucide) window.lucide.createIcons();
@@ -223,6 +230,25 @@ function updateThemeUI() {
   if (els.themeToggleIcon) {
     els.themeToggleIcon.setAttribute("data-lucide", isDark ? "sun" : "moon");
     if (window.lucide) window.lucide.createIcons();
+  }
+}
+
+function toggleReadingMode() {
+  const isEnabled = document.documentElement.classList.toggle("reading-mode");
+  localStorage.setItem("readingMode", isEnabled ? "enabled" : "disabled");
+  updateReadingModeUI();
+}
+
+function updateReadingModeUI() {
+  const isEnabled = document.documentElement.classList.contains("reading-mode");
+  if (els.readingModeBtn) {
+    if (isEnabled) {
+      els.readingModeBtn.classList.remove("bg-white", "dark:bg-slate-900", "text-slate-900", "dark:text-white");
+      els.readingModeBtn.classList.add("bg-amber-100", "dark:bg-amber-950/40", "text-amber-800", "dark:text-amber-300", "border-amber-300", "dark:border-amber-800/80");
+    } else {
+      els.readingModeBtn.classList.add("bg-white", "dark:bg-slate-900", "text-slate-900", "dark:text-white");
+      els.readingModeBtn.classList.remove("bg-amber-100", "dark:bg-amber-950/40", "text-amber-800", "dark:text-amber-300", "border-amber-300", "dark:border-amber-800/80");
+    }
   }
 }
 

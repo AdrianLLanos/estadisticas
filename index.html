@@ -73,6 +73,32 @@
         position: relative;
         z-index: 1;
       }
+
+      /* Matchup card background layer */
+      #matchupBg {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background-size: cover;
+        background-position: center 30%;
+        background-repeat: no-repeat;
+        opacity: 0;
+        transition: background-image 0s, opacity 0.8s ease;
+        pointer-events: none;
+      }
+      #matchupBg::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        /* gradient: fades the stadium to the left matching the card theme */
+        background: linear-gradient(
+          to right,
+          #0f172a 0%,
+          rgba(15, 23, 42, 0.98) 25%,
+          rgba(15, 23, 42, 0.85) 55%,
+          rgba(15, 23, 42, 0.15) 100%
+        );
+      }
     </style>
   </head>
   <body class="min-h-screen bg-[#060a13] text-slate-100 antialiased">
@@ -115,15 +141,18 @@
         </aside>
 
         <section class="flex min-w-0 flex-col gap-5">
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
-            <div class="flex flex-col gap-4 border-b border-slate-800 p-4 xl:flex-row xl:items-center xl:justify-between">
-              <div id="matchupHeader" class="min-h-14">
+          <div class="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
+            <!-- Local faded stadium image inside the matchup card -->
+            <div id="matchupBg" aria-hidden="true"></div>
+            
+            <div class="relative z-10 flex flex-col gap-4 border-b border-slate-800 p-4 xl:flex-row xl:items-center xl:justify-between">
+              <div id="matchupHeader" class="w-full min-h-14">
                 <p class="text-sm font-semibold text-slate-400">Selecciona un partido</p>
                 <h2 class="mt-1 text-2xl font-bold text-white">Sin comparación</h2>
               </div>
               <button
                 id="compareBtn"
-                class="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                class="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
                 type="button"
                 disabled
               >

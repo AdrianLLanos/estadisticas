@@ -108,21 +108,34 @@ function getStadiumImage(venueName) {
   return null;
 }
 
-// Updates the fixed #stadiumBg element with the correct stadium photo
+// Updates the fixed #stadiumBg and card #matchupBg elements with the correct stadium photo
 function setStadiumBackground(venueName) {
   const bg = document.getElementById('stadiumBg');
-  if (!bg) return;
+  const localBg = document.getElementById('matchupBg');
   const img = getStadiumImage(venueName);
+  
   if (!img) {
-    bg.style.opacity = '0';
+    if (bg) bg.style.opacity = '0';
+    if (localBg) localBg.style.opacity = '0';
     return;
   }
+  
   // Fade out, swap image, fade back in
-  bg.style.opacity = '0';
-  setTimeout(() => {
-    bg.style.backgroundImage = `url('${img}')`;
-    bg.style.opacity = '1';
-  }, 350);
+  if (bg) {
+    bg.style.opacity = '0';
+    setTimeout(() => {
+      bg.style.backgroundImage = `url('${img}')`;
+      bg.style.opacity = '1';
+    }, 350);
+  }
+  
+  if (localBg) {
+    localBg.style.opacity = '0';
+    setTimeout(() => {
+      localBg.style.backgroundImage = `url('${img}')`;
+      localBg.style.opacity = '1';
+    }, 350);
+  }
 }
 
 const state = {
@@ -1464,16 +1477,91 @@ function renderMatchupHeader(game) {
       <p class="text-sm font-semibold text-slate-400">Selecciona un partido</p>
       <h2 class="mt-1 text-2xl font-bold text-white">Sin comparación</h2>
     `;
+    setStadiumBackground('');
     return;
   }
 
+  // Update stadium background using home team's venue immediately
+  setStadiumBackground(game.venue?.name || '');
+
   const away = game.teams.away.team.name;
   const home = game.teams.home.team.name;
+  const awayId = game.teams.away.team.id;
+  const homeId = game.teams.home.team.id;
+
+  // W-L records
+  const awayWins = game.teams.away.leagueRecord?.wins ?? 0;
+  const awayLosses = game.teams.away.leagueRecord?.losses ?? 0;
+  const homeWins = game.teams.home.leagueRecord?.wins ?? 0;
+  const homeLosses = game.teams.home.leagueRecord?.losses ?? 0;
+
+  const awayRecord = (awayWins || awayLosses) ? `${awayWins}-${awayLosses}` : "";
+  const homeRecord = (homeWins || homeLosses) ? `${homeWins}-${homeLosses}` : "";
+
+  const awayLogo = mlbTeamLogoUrl(awayId);
+  const homeLogo = mlbTeamLogoUrl(homeId);
+
   const venue = game.venue?.name || "Estadio N/D";
+  
+  // Try to find location (City, State) from ESPN event context if loaded
+  const espnEvent = findEspnEvent(game);
+  const espnVenue = espnEvent?.competitions?.[0]?.venue;
+  const city = espnVenue?.address?.city || "";
+  const state = espnVenue?.address?.state || "";
+  const location = city && state ? `${city}, ${state}` : "";
+
+  const time = game.gameDate ? formatTime(game.gameDate) : "";
+
   els.matchupHeader.innerHTML = `
-    <p class="text-sm font-semibold text-slate-400">${formatTime(game.gameDate)} · ${venue}</p>
-    <h2 class="mt-1 text-2xl font-bold text-white">${away} @ ${home}</h2>
+    <div class="flex flex-col gap-6 md:flex-row md:items-center justify-between w-full relative z-10">
+      <!-- Matchup section -->
+      <div class="flex items-center gap-4 sm:gap-6">
+        <!-- Away Team -->
+        <div class="flex flex-col items-center text-center w-24 sm:w-28">
+          <img src="${awayLogo}" alt="${away}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
+          <span class="mt-2 text-[11px] sm:text-xs font-black uppercase text-slate-100 tracking-wider line-clamp-1">${escapeHtml(away)}</span>
+          <span class="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-bold">${escapeHtml(awayRecord)}</span>
+        </div>
+        
+        <!-- @ Circle -->
+        <div class="flex h-9 w-9 items-center justify-center rounded-full border border-slate-800 bg-slate-900/50">
+          <span class="text-xs font-bold text-slate-400">@</span>
+        </div>
+        
+        <!-- Home Team -->
+        <div class="flex flex-col items-center text-center w-24 sm:w-28">
+          <img src="${homeLogo}" alt="${home}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
+          <span class="mt-2 text-[11px] sm:text-xs font-black uppercase text-slate-100 tracking-wider line-clamp-1">${escapeHtml(home)}</span>
+          <span class="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-bold">${escapeHtml(homeRecord)}</span>
+        </div>
+      </div>
+      
+      <!-- Spacing for the static Compare Button on desktop -->
+      <div class="hidden xl:block w-44"></div>
+    </div>
+    
+    <!-- Divider Line -->
+    <div class="my-4 border-t border-slate-800 relative z-10"></div>
+    
+    <!-- Metadata Footer -->
+    <div class="flex flex-wrap items-center gap-4 text-[11px] sm:text-xs text-slate-300 relative z-10">
+      <div class="flex items-center gap-1.5">
+        <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-400"></i>
+        <span class="font-bold">${time}</span>
+      </div>
+      <div class="h-3 w-px bg-slate-800 hidden sm:block"></div>
+      <div class="flex items-start gap-1.5">
+        <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-400 mt-0.5"></i>
+        <div class="flex flex-col">
+          <span class="font-bold uppercase tracking-wider text-slate-100">${escapeHtml(venue)}</span>
+          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
+        </div>
+      </div>
+    </div>
   `;
+
+  // Instantiate Lucide icons inside the newly injected HTML
+  if (window.lucide) window.lucide.createIcons();
 }
 
 function renderSummary(projection) {

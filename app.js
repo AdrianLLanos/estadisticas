@@ -63,6 +63,68 @@ const MLB_STADIUMS = {
 
 const MLB_PARK_FACTORS = Object.fromEntries(Object.entries(MLB_STADIUMS).map(([name, stadium]) => [name, stadium.parkFactor]));
 
+// Maps each stadium name to its local downloaded image file
+const STADIUM_IMAGE_MAP = {
+  "Angel Stadium":                 "images/angel_stadium.jpg",
+  "Chase Field":                   "images/chase_field.jpg",
+  "Truist Park":                   "images/truist_park.jpg",
+  "Oriole Park at Camden Yards":   "images/oriole_park_at_camden_yards.jpg",
+  "Fenway Park":                   "images/fenway_park.jpg",
+  "Wrigley Field":                 "images/wrigley_field.jpg",
+  "Great American Ball Park":      "images/great_american_ball_park.jpg",
+  "Progressive Field":             "images/progressive_field.jpg",
+  "Coors Field":                   "images/coors_field.jpg",
+  "Comerica Park":                 "images/comerica_park.jpg",
+  "Minute Maid Park":              "images/minute_maid_park.jpg",
+  "Kauffman Stadium":              "images/kauffman_stadium.jpg",
+  "Dodger Stadium":                "images/dodger_stadium.jpg",
+  "loanDepot park":                "images/loandepot_park.jpg",
+  "American Family Field":         "images/american_family_field.jpg",
+  "Target Field":                  "images/target_field.jpg",
+  "Yankee Stadium":                "images/yankee_stadium.jpg",
+  "Citi Field":                    "images/citi_field.jpg",
+  "Citizens Bank Park":            "images/citizens_bank_park.jpg",
+  "PNC Park":                      "images/pnc_park.jpg",
+  "Petco Park":                    "images/petco_park.jpg",
+  "T-Mobile Park":                 "images/t_mobile_park.jpg",
+  "Oracle Park":                   "images/oracle_park.jpg",
+  "Busch Stadium":                 "images/busch_stadium.jpg",
+  "Oakland Coliseum":              "images/oakland_coliseum.jpg",
+  "Tropicana Field":               "images/tropicana_field.jpg",
+  "Globe Life Field":              "images/globe_life_field.jpg",
+  "Rogers Centre":                 "images/rogers_centre.jpg",
+  "Nationals Park":                "images/nationals_park.jpg",
+  "Guaranteed Rate Field":         "images/guaranteed_rate_field.jpg",
+};
+
+// Resolves stadium image for a given venue name (fuzzy match)
+function getStadiumImage(venueName) {
+  if (!venueName) return null;
+  if (STADIUM_IMAGE_MAP[venueName]) return STADIUM_IMAGE_MAP[venueName];
+  const norm = venueName.toLowerCase();
+  for (const [key, val] of Object.entries(STADIUM_IMAGE_MAP)) {
+    if (norm.includes(key.toLowerCase()) || key.toLowerCase().includes(norm)) return val;
+  }
+  return null;
+}
+
+// Updates the fixed #stadiumBg element with the correct stadium photo
+function setStadiumBackground(venueName) {
+  const bg = document.getElementById('stadiumBg');
+  if (!bg) return;
+  const img = getStadiumImage(venueName);
+  if (!img) {
+    bg.style.opacity = '0';
+    return;
+  }
+  // Fade out, swap image, fade back in
+  bg.style.opacity = '0';
+  setTimeout(() => {
+    bg.style.backgroundImage = `url('${img}')`;
+    bg.style.opacity = '1';
+  }, 350);
+}
+
 const state = {
   games: [],
   espnEvents: [],
@@ -145,6 +207,9 @@ async function loadSlate() {
 async function compareSelectedGame() {
   const game = getSelectedGame();
   if (!game) return;
+
+  // Update stadium background using home team's venue
+  setStadiumBackground(game.venue?.name || '');
 
   const away = game.teams.away.team;
   const home = game.teams.home.team;

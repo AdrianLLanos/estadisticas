@@ -4,74 +4,71 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Comparador MLB</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {
               sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "Arial"],
+              sports: ["Bebas Neue", "Impact", "sans-serif"],
             },
             boxShadow: {
-              panel: "0 18px 50px rgba(17, 24, 39, 0.10)",
+              panel: "0 2px 12px rgba(15, 23, 42, 0.08)",
+              'panel-dark': "0 4px 20px rgba(0, 0, 0, 0.25)",
             },
           },
         },
       };
     </script>
     <style>
+      :root {
+        --matchup-bg-start: rgba(255,255,255,0.97);
+        --matchup-bg-mid1: rgba(255,255,255,0.92);
+        --matchup-bg-mid2: rgba(255,255,255,0.70);
+        --matchup-bg-end: rgba(255,255,255,0.15);
+      }
+      html.dark {
+        --matchup-bg-start: rgba(15, 23, 42, 0.98);
+        --matchup-bg-mid1: rgba(15, 23, 42, 0.94);
+        --matchup-bg-mid2: rgba(15, 23, 42, 0.70);
+        --matchup-bg-end: rgba(15, 23, 42, 0.15);
+      }
+      .font-sports {
+        font-family: 'Bebas Neue', 'Impact', sans-serif;
+      }
       html, body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         text-rendering: optimizeLegibility;
       }
       img {
-        -webkit-font-smoothing: antialiased;
-        image-rendering: -webkit-optimize-contrast;
-        image-rendering: crisp-edges;
-      }
-      .img-crisp {
-        image-rendering: crisp-edges;
-        -webkit-font-smoothing: antialiased;
+        image-rendering: auto;
       }
       .img-smooth {
         image-rendering: smooth;
         image-rendering: -webkit-optimize-contrast;
       }
 
-      /* Stadium background layer */
-      #stadiumBg {
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        background-size: cover;
-        background-position: center 30%;
-        background-repeat: no-repeat;
-        opacity: 0;
-        transition: background-image 0s, opacity 0.8s ease;
-        pointer-events: none;
+      /* Scrollbar dark mode adjustments */
+      .dark ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
       }
-      #stadiumBg::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        /* gradient: dark left side fades to nearly transparent right – like the reference image */
-        background: linear-gradient(
-          to right,
-          #060a13 0%,
-          rgba(6, 10, 19, 0.95) 30%,
-          rgba(6, 10, 19, 0.7) 65%,
-          rgba(6, 10, 19, 0.2) 100%
-        );
+      .dark ::-webkit-scrollbar-track {
+        background: rgba(15, 23, 42, 0.3);
       }
-      body > #stadiumBg + * {
-        position: relative;
-        z-index: 1;
+      .dark ::-webkit-scrollbar-thumb {
+        background: rgba(51, 65, 85, 0.6);
+        border-radius: 4px;
       }
-      main {
-        position: relative;
-        z-index: 1;
+      .dark ::-webkit-scrollbar-thumb:hover {
+        background: rgba(71, 85, 105, 0.8);
       }
 
       /* Matchup card background layer */
@@ -85,75 +82,94 @@
         opacity: 0;
         transition: background-image 0s, opacity 0.8s ease;
         pointer-events: none;
+        border-radius: 0.5rem 0.5rem 0 0;
       }
       #matchupBg::after {
         content: '';
         position: absolute;
         inset: 0;
-        /* gradient: fades the stadium to the left matching the card theme */
         background: linear-gradient(
           to right,
-          #0f172a 0%,
-          rgba(15, 23, 42, 0.98) 25%,
-          rgba(15, 23, 42, 0.85) 55%,
-          rgba(15, 23, 42, 0.15) 100%
+          var(--matchup-bg-start) 0%,
+          var(--matchup-bg-mid1) 30%,
+          var(--matchup-bg-mid2) 60%,
+          var(--matchup-bg-end) 100%
         );
       }
     </style>
+    <script>
+      (function() {
+        const theme = localStorage.getItem('theme') || 'dark';
+        if (theme === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
   </head>
-  <body class="min-h-screen bg-[#060a13] text-slate-100 antialiased">
-    <!-- Fixed stadium background (updated by JS on compare) -->
-    <div id="stadiumBg" aria-hidden="true"></div>
+  <body class="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-white antialiased transition-colors duration-200">
+
     <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-      <header class="flex flex-col gap-4 border-b border-slate-800 pb-5 lg:flex-row lg:items-end lg:justify-between">
+      <header class="flex flex-col gap-4 border-b border-slate-200 dark:border-slate-800 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div class="flex flex-wrap items-center gap-2">
-            <p class="text-sm font-semibold uppercase tracking-wide text-emerald-400">MLB Stats API + ESPN MLB</p>
-            <span id="calibrationBadge" class="inline-flex items-center rounded-full bg-slate-900/60 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">Auto-Ajuste: Cargando...</span>
+            <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-350">MLB Stats API + ESPN MLB</p>
+            <span id="calibrationBadge" class="inline-flex items-center rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-700 dark:text-slate-200 shadow-sm">Auto-Ajuste: Cargando...</span>
           </div>
-          <h1 class="mt-1 text-3xl font-bold text-white sm:text-4xl">Comparador MLB</h1>
+          <h1 class="mt-1 text-3xl font-bold text-black dark:text-white sm:text-4xl">Comparador MLB</h1>
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <label class="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 shadow-sm">
-            <i data-lucide="calendar-days" class="h-4 w-4 text-slate-400"></i>
+          <label class="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 shadow-sm">
+            <i data-lucide="calendar-days" class="h-4 w-4 text-slate-550 dark:text-slate-400"></i>
             <span class="sr-only">Fecha</span>
-            <input id="dateInput" type="date" class="bg-transparent text-sm font-semibold text-white outline-none [color-scheme:dark]" />
+            <input id="dateInput" type="date" class="bg-transparent text-sm font-semibold text-slate-900 dark:text-white outline-none" />
           </label>
           <button
             id="loadBtn"
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 border border-slate-800 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-700"
+            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 text-sm font-semibold text-slate-900 dark:text-white shadow-sm transition hover:bg-slate-50 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:focus:ring-slate-700"
             type="button"
           >
             <i data-lucide="refresh-cw" class="h-4 w-4"></i>
             Cargar jornada
           </button>
+          <button
+            id="themeToggleBtn"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-sm transition hover:bg-slate-50 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:focus:ring-slate-700"
+            type="button"
+            aria-label="Alternar tema"
+          >
+            <i id="themeToggleIcon" data-lucide="moon" class="h-4 w-4"></i>
+          </button>
         </div>
       </header>
 
       <section class="grid flex-1 gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
-        <aside class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl lg:sticky lg:top-5 lg:self-start">
-          <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-            <h2 class="text-sm font-bold uppercase tracking-wide text-slate-300">Partidos</h2>
-            <span id="gameCount" class="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-400">0</span>
+        <aside class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark lg:sticky lg:top-5 lg:self-start">
+          <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-4 py-3">
+            <h2 class="text-sm font-bold uppercase tracking-wide text-slate-800 dark:text-slate-200">Partidos</h2>
+            <span id="gameCount" class="rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 px-2.5 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-350">0</span>
           </div>
           <div id="gamesList" class="max-h-[calc(100vh-105px)] min-h-[360px] overflow-y-auto p-3"></div>
         </aside>
 
         <section class="flex min-w-0 flex-col gap-5">
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
-            <div class="relative overflow-hidden z-10 flex flex-col gap-3.5 border-b border-slate-800 py-3.5 px-5 rounded-t-lg">
+          <!-- Grid wrapper for matchup details & predictor circle -->
+          <!-- Matchup Header & Status Box (Full Width) -->
+          <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark flex flex-col justify-between overflow-hidden relative mb-5">
+            <div class="relative overflow-hidden z-10 flex flex-col gap-3.5 border-b border-slate-100 dark:border-slate-800 py-3.5 px-5 rounded-t-lg">
               <!-- Local faded stadium image inside the matchup card header only -->
               <div id="matchupBg" aria-hidden="true"></div>
               
               <!-- Top Row: Metadata on the left, Compare Button on the right -->
               <div class="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 w-full">
-                <div id="matchupMetadata" class="flex flex-wrap items-center gap-4 text-[11px] sm:text-xs text-slate-300">
-                  <span class="text-slate-400 font-semibold">Selecciona un partido de la lista</span>
+                <div id="matchupMetadata" class="flex flex-wrap items-center gap-4 text-[11px] sm:text-xs text-slate-850 dark:text-slate-200">
+                  <span class="text-slate-700 dark:text-slate-100 font-semibold">Selecciona un partido de la lista</span>
                 </div>
                 <button
                   id="compareBtn"
-                  class="relative z-10 inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                  class="relative z-10 inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600"
                   type="button"
                   disabled
                 >
@@ -163,37 +179,51 @@
               </div>
 
               <!-- Divider Line -->
-              <div class="border-t border-slate-800/80 relative z-10"></div>
+              <div class="border-t border-slate-200/80 dark:border-slate-800 relative z-10"></div>
               
               <!-- Bottom Row: Matchup details (Logos, Names, Records) -->
               <div id="matchupHeader" class="w-full relative z-10">
                 <div class="text-center py-4">
-                  <h2 class="text-lg font-bold text-white">Sin comparación</h2>
+                  <h2 class="text-lg font-bold text-slate-900 dark:text-white">Sin comparación</h2>
                 </div>
               </div>
             </div>
 
-            <div id="statusBox" class="border-b border-slate-800 bg-slate-950/60 px-4 py-3 text-sm font-semibold text-amber-400">
+            <div id="statusBox" class="border-b border-slate-100 dark:border-slate-800 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm font-semibold text-amber-700 dark:text-amber-450">
               Carga la jornada para comenzar.
             </div>
+          </div>
 
-            <div id="summaryGrid" class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4"></div>
+          <!-- Bottom Row: Grid with Summary Grid (left) and Predictor Card (right) -->
+          <div class="grid gap-5 grid-cols-1 lg:grid-cols-3">
+            <!-- Left Side: Summary Grid (span 2) -->
+            <div id="summaryGrid" class="lg:col-span-2 grid gap-3 sm:grid-cols-2 self-start"></div>
+
+            <!-- Right Side: Predictor de Duelos Card (span 1) -->
+            <div id="predictorCard" class="self-start rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 shadow-panel dark:shadow-panel-dark flex flex-col">
+              <div class="flex items-center pb-3 border-b border-slate-100 dark:border-slate-800">
+                <h3 class="text-xs font-bold uppercase tracking-widest text-slate-800 dark:text-slate-200">Predictor de Duelos</h3>
+              </div>
+              <div id="predictorCardContent" class="flex-1 flex flex-col items-center justify-center py-3 text-center text-sm font-semibold text-slate-800 dark:text-slate-200">
+                Compara un partido para ver la probabilidad de victoria.
+              </div>
+            </div>
           </div>
 
           <div id="pitcherGrid">
-            <div class="rounded-lg border border-dashed border-slate-800 bg-slate-900/40 p-5 text-center text-sm font-semibold text-slate-400 backdrop-blur-sm shadow-2xl">
+            <div class="rounded-lg border border-dashed border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 text-center text-sm font-semibold text-slate-800 dark:text-slate-200 shadow-panel dark:shadow-panel-dark">
               Compara un partido para ver los abridores y sus estadisticas.
             </div>
           </div>
 
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
-            <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-              <h2 class="text-sm font-bold uppercase tracking-wide text-slate-300">Estimaciones</h2>
-              <span id="sourceBadge" class="rounded-full bg-sky-950/60 border border-sky-800/80 px-2.5 py-1 text-xs font-bold text-sky-400">Sin datos</span>
+          <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
+            <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-4 py-3">
+              <h2 class="text-sm font-bold uppercase tracking-wide text-slate-800 dark:text-slate-200">Estimaciones</h2>
+              <span id="sourceBadge" class="rounded-full bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-850/50 px-2.5 py-1 text-xs font-bold text-sky-750 dark:text-sky-350">Sin datos</span>
             </div>
             <div class="overflow-x-auto">
               <table class="w-full min-w-[760px] text-left text-sm">
-                <thead class="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-400 border-b border-slate-800">
+                <thead class="bg-slate-50 dark:bg-slate-900 text-xs uppercase tracking-wide text-slate-800 dark:text-slate-200 border-b border-slate-200 dark:border-slate-800">
                   <tr>
                     <th class="px-4 py-3">Mercado</th>
                     <th class="px-4 py-3">Pronóstico</th>
@@ -202,17 +232,17 @@
                     <th class="px-4 py-3">Base</th>
                   </tr>
                 </thead>
-                <tbody id="resultsBody" class="divide-y divide-slate-800/50">
+                <tbody id="resultsBody" class="divide-y divide-slate-100 dark:divide-slate-800">
                   <tr>
-                    <td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-400">Aún no hay comparación.</td>
+                    <td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-700 dark:text-slate-200">Aún no hay comparación.</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
 
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md p-4 text-sm leading-6 text-slate-400 shadow-2xl">
-            <strong class="text-slate-200">Aviso:</strong> son proyecciones estadísticas automáticas con datos públicos. No garantizan resultados ni sustituyen gestión de riesgo.
+          <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-4 text-sm leading-6 text-slate-800 dark:text-slate-200 shadow-panel dark:shadow-panel-dark">
+            <strong class="text-slate-900 dark:text-slate-100">Aviso:</strong> son proyecciones estadísticas automáticas con datos públicos. No garantizan resultados ni sustituyen gestión de riesgo.
           </div>
         </section>
       </section>

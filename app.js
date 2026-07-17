@@ -108,27 +108,17 @@ function getStadiumImage(venueName) {
   return null;
 }
 
-// Updates the fixed #stadiumBg and card #matchupBg elements with the correct stadium photo
+// Updates the card #matchupBg element with the correct stadium photo
 function setStadiumBackground(venueName) {
-  const bg = document.getElementById('stadiumBg');
   const localBg = document.getElementById('matchupBg');
   const img = getStadiumImage(venueName);
   
   if (!img) {
-    if (bg) bg.style.opacity = '0';
     if (localBg) localBg.style.opacity = '0';
     return;
   }
   
   // Fade out, swap image, fade back in
-  if (bg) {
-    bg.style.opacity = '0';
-    setTimeout(() => {
-      bg.style.backgroundImage = `url('${img}')`;
-      bg.style.opacity = '1';
-    }, 350);
-  }
-  
   if (localBg) {
     localBg.style.opacity = '0';
     setTimeout(() => {
@@ -146,6 +136,7 @@ const state = {
   pitcherStats: new Map(),
   recentContexts: new Map(),
   isCalibrating: false,
+  activeProjection: null,
 };
 
 const els = {
@@ -156,22 +147,48 @@ const els = {
   gameCount: document.querySelector("#gameCount"),
   matchupHeader: document.querySelector("#matchupHeader"),
   matchupMetadata: document.querySelector("#matchupMetadata"),
+  predictorCardContent: document.querySelector("#predictorCardContent"),
   statusBox: document.querySelector("#statusBox"),
   summaryGrid: document.querySelector("#summaryGrid"),
   pitcherGrid: document.querySelector("#pitcherGrid"),
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
   calibrationBadge: document.querySelector("#calibrationBadge"),
+  themeToggleBtn: document.querySelector("#themeToggleBtn"),
+  themeToggleIcon: document.querySelector("#themeToggleIcon"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
   els.dateInput.value = toDateInputValue(new Date());
   els.loadBtn.addEventListener("click", loadSlate);
   els.compareBtn.addEventListener("click", compareSelectedGame);
+  
+  if (els.themeToggleBtn) {
+    els.themeToggleBtn.addEventListener("click", toggleTheme);
+    updateThemeUI();
+  }
+  
   if (window.lucide) window.lucide.createIcons();
   updateCalibrationBadge();
   loadSlate();
 });
+
+function toggleTheme() {
+  const isDark = document.documentElement.classList.toggle("dark");
+  localStorage.setItem("theme", isDark ? "dark" : "light");
+  updateThemeUI();
+  if (state.activeProjection) {
+    renderPredictor(state.activeProjection);
+  }
+}
+
+function updateThemeUI() {
+  const isDark = document.documentElement.classList.contains("dark");
+  if (els.themeToggleIcon) {
+    els.themeToggleIcon.setAttribute("data-lucide", isDark ? "sun" : "moon");
+    if (window.lucide) window.lucide.createIcons();
+  }
+}
 
 async function loadSlate() {
   setBusy(true, "Cargando partidos de la jornada...");
@@ -235,7 +252,7 @@ async function compareSelectedGame() {
     const espnWeather = extractEspnWeather(espnEvent);
     const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
     const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, openMeteoWeather] = await Promise.all([
+    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, openMeteoWeather, awayBullpenRoster, homeBullpenRoster] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
@@ -243,6 +260,8 @@ async function compareSelectedGame() {
       getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
       getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
       fetchOpenMeteoWeather(game.venue?.name, game.gameDate),
+      fetchBullpenRoster(away.id, season, game.teams.away.probablePitcher?.id),
+      fetchBullpenRoster(home.id, season, game.teams.home.probablePitcher?.id),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
@@ -260,9 +279,16 @@ async function compareSelectedGame() {
       weather,
     });
 
+    projection.awayBullpenRoster = awayBullpenRoster;
+    projection.homeBullpenRoster = homeBullpenRoster;
+
+    state.activeProjection = projection;
+
     renderSummary(projection);
     renderPitchers(projection);
+    renderBullpens(projection);
     renderResults(projection);
+    renderPredictor(projection);
     const calInfo = obtenerCalibracion();
     const calText = calInfo.totalGames > 0
       ? ` | Auto-Ajuste: Carreras x${calInfo.runsBias.toFixed(2)}, Hits x${calInfo.hitsBias.toFixed(2)} (${calInfo.totalGames} G)`
@@ -430,18 +456,18 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   let runLineProb = 0;
   if (probability.favorite === "home") {
     if (finalPoisson.homeMinus1_5Prob >= 0.46) {
-      runLinePick = `${homeName} -1.5`;
+      runLinePick = `${homeTeam.name} -1.5`;
       runLineProb = finalPoisson.homeMinus1_5Prob;
     } else {
-      runLinePick = `${awayName} +1.5`;
+      runLinePick = `${awayTeam.name} +1.5`;
       runLineProb = 1 - finalPoisson.homeMinus1_5Prob;
     }
   } else {
     if (finalPoisson.awayMinus1_5Prob >= 0.46) {
-      runLinePick = `${awayName} -1.5`;
+      runLinePick = `${awayTeam.name} -1.5`;
       runLineProb = finalPoisson.awayMinus1_5Prob;
     } else {
-      runLinePick = `${homeName} +1.5`;
+      runLinePick = `${homeTeam.name} +1.5`;
       runLineProb = 1 - finalPoisson.awayMinus1_5Prob;
     }
   }
@@ -604,6 +630,12 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     confidence,
     totalConfidence,
     odds,
+    awayColor: espnTeams.away?.color || "",
+    homeColor: espnTeams.home?.color || "",
+    awayAlternateColor: espnTeams.away?.alternateColor || "",
+    homeAlternateColor: espnTeams.home?.alternateColor || "",
+    awayAbbreviation: espnTeams.away?.abbreviation || game.teams.away.team.abbreviation || "",
+    homeAbbreviation: espnTeams.home?.abbreviation || game.teams.home.team.abbreviation || "",
     pitchers: {
       away: awayPitcher,
       home: homePitcher,
@@ -1001,6 +1033,70 @@ async function getActivePitchers(teamId, probablePitcherId) {
     return { pitchers, relieversAvailable: relievers.length || Math.max(pitchers.length - 5, 6) };
   } catch {
     return { pitchers: [], relieversAvailable: 7 };
+  }
+}
+
+async function fetchBullpenRoster(teamId, season, probablePitcherId) {
+  try {
+    const data = await fetchJson(
+      `${MLB_BASE}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=season,group=pitching,season=${season}))`
+    );
+    const pitchers = (data.roster || []).filter((item) => item.position?.type === "Pitcher");
+    const relievers = pitchers
+      .filter((item) => {
+        if (item.person?.id === probablePitcherId) return false;
+        const stat = item.person?.stats?.[0]?.splits?.[0]?.stat || {};
+        const games = number(stat.gamesPlayed);
+        const starts = number(stat.gamesStarted);
+        // Include if 0 starts or starts are ≤45% of appearances → reliever
+        return games === 0 || starts <= Math.max(1, games * 0.45);
+      })
+      .map((item) => {
+        const person = item.person || {};
+        const stat = person.stats?.[0]?.splits?.[0]?.stat || {};
+        const innings = inningsToNumber(stat.inningsPitched);
+        const earnedRuns = number(stat.earnedRuns);
+        const era = innings > 0 ? (earnedRuns * 9) / innings : null;
+        const hits = number(stat.hits);
+        const walks = number(stat.baseOnBalls);
+        const whip = innings > 0 ? (hits + walks) / innings : null;
+        const strikeouts = number(stat.strikeOuts);
+        const k9 = innings > 0 ? (strikeouts * 9) / innings : null;
+        const games = number(stat.gamesPlayed);
+        const saves = number(stat.saves);
+        const holds = number(stat.holds);
+        const blownSaves = number(stat.blownSaves);
+        const hand = String(person.pitchHand?.code || person.pitchHand?.description || "R").toUpperCase().startsWith("L") ? "L" : "R";
+        return {
+          id: person.id,
+          name: person.fullName || item.person?.fullName || "N/D",
+          shortName: person.lastName || person.fullName || "N/D",
+          jersey: item.jerseyNumber || "",
+          hand,
+          games,
+          innings,
+          inningsDisplay: stat.inningsPitched || (innings > 0 ? innings.toFixed(1) : "N/D"),
+          era,
+          whip,
+          k9,
+          saves,
+          holds,
+          blownSaves,
+          strikeouts,
+          walks,
+        };
+      })
+      // Sort: closers first (saves), then holds, then ERA
+      .sort((a, b) => {
+        if (b.saves !== a.saves) return b.saves - a.saves;
+        if (b.holds !== a.holds) return b.holds - a.holds;
+        const eraA = Number.isFinite(a.era) ? a.era : 99;
+        const eraB = Number.isFinite(b.era) ? b.era : 99;
+        return eraA - eraB;
+      });
+    return relievers;
+  } catch {
+    return [];
   }
 }
 
@@ -1436,22 +1532,22 @@ function renderGames() {
         <button
           class="mb-2 w-full rounded-lg border px-3 py-3 text-left transition ${
             selected
-              ? "border-emerald-500 bg-emerald-950/40 text-white shadow-sm"
-              : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900/40"
+              ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-950 dark:text-emerald-300 shadow-sm"
+              : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
           }"
           type="button"
           data-game-pk="${game.gamePk}"
         >
           <div class="flex items-center justify-between gap-3">
-            <span class="text-xs font-bold uppercase tracking-wide text-slate-400">${time}</span>
-            <span class="rounded-full bg-slate-900 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">${status}</span>
+            <span class="text-xs font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">${time}</span>
+            <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-800 dark:text-slate-100">${status}</span>
           </div>
-          <div class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-sm font-bold text-white">
+          <div class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
             <span class="truncate">${away.name}</span>
-            <span class="text-slate-500">@</span>
+            <span class="text-slate-550 dark:text-slate-400">@</span>
             <span class="truncate text-right">${home.name}</span>
           </div>
-          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
+          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-750 dark:text-slate-200">
             <span class="truncate">${awayPitcherName}</span>
             <span class="truncate text-right">${homePitcherName}</span>
           </div>
@@ -1476,12 +1572,12 @@ function renderMatchupHeader(game) {
   if (!game) {
     els.matchupHeader.innerHTML = `
       <div class="text-center py-4">
-        <h2 class="text-lg font-bold text-white">Sin comparación</h2>
+        <h2 class="text-lg font-bold text-slate-700 dark:text-slate-300">Sin comparación</h2>
       </div>
     `;
     if (els.matchupMetadata) {
       els.matchupMetadata.innerHTML = `
-        <span class="text-slate-400 font-semibold">Selecciona un partido de la lista</span>
+        <span class="text-slate-400 dark:text-slate-500 font-semibold">Selecciona un partido de la lista</span>
       `;
     }
     setStadiumBackground('');
@@ -1523,15 +1619,16 @@ function renderMatchupHeader(game) {
   if (els.matchupMetadata) {
     els.matchupMetadata.innerHTML = `
       <div class="flex items-center gap-1.5">
-        <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-400"></i>
-        <span class="font-bold">${time}</span>
+        <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-605 dark:text-slate-300"></i>
+        <span class="font-bold text-slate-900 dark:text-white">${time}</span>
       </div>
-      <div class="h-3 w-px bg-slate-800 hidden sm:block"></div>
+      <div class="h-3 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block"></div>
       <div class="flex items-start gap-1.5">
-        <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-400 mt-0.5"></i>
+        <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-605 dark:text-slate-300 mt-0.5"></i>
         <div class="flex flex-col">
-          <span class="font-bold uppercase tracking-wider text-slate-100">${escapeHtml(venue)}</span>
-          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
+          <span class="font-bold uppercase tracking-wider text-slate-900 dark:text-white">${escapeHtml(venue)}</span>
+          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-750 dark:text-slate-200 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
+          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-700 dark:text-slate-300 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
         </div>
       </div>
     `;
@@ -1543,20 +1640,20 @@ function renderMatchupHeader(game) {
       <!-- Away Team -->
       <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
         <img src="${awayLogo}" alt="${away}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
-        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-100 tracking-wider">${escapeHtml(away)}</span>
-        <span class="mt-0.5 text-xs sm:text-sm text-slate-400 font-bold">${escapeHtml(awayRecord)}</span>
+        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-900 dark:text-white tracking-wider">${escapeHtml(away)}</span>
+        <span class="mt-0.5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-bold">${escapeHtml(awayRecord)}</span>
       </div>
       
       <!-- @ Circle -->
-      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-800 bg-slate-900/50">
-        <span class="text-xs font-bold text-slate-400">@</span>
+      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900">
+        <span class="text-xs font-bold text-slate-600 dark:text-slate-300">@</span>
       </div>
       
       <!-- Home Team -->
       <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
         <img src="${homeLogo}" alt="${home}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
-        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-100 tracking-wider">${escapeHtml(home)}</span>
-        <span class="mt-0.5 text-xs sm:text-sm text-slate-400 font-bold">${escapeHtml(homeRecord)}</span>
+        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-900 dark:text-white tracking-wider">${escapeHtml(home)}</span>
+        <span class="mt-0.5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-bold">${escapeHtml(homeRecord)}</span>
       </div>
     </div>
   `;
@@ -1566,11 +1663,40 @@ function renderMatchupHeader(game) {
 }
 
 function renderSummary(projection) {
+  const getAbbrev = (teamName, gameObj) => {
+    if (!gameObj || !gameObj.teams) return teamAbbrev(teamName);
+    const away = gameObj.teams.away?.team;
+    const home = gameObj.teams.home?.team;
+    if (away && normalizeName(away.name) === normalizeName(teamName)) {
+      return away.abbreviation || teamAbbrev(away.name);
+    }
+    if (home && normalizeName(home.name) === normalizeName(teamName)) {
+      return home.abbreviation || teamAbbrev(home.name);
+    }
+    return teamAbbrev(teamName);
+  };
+
+  const getTeamNickname = (teamName, gameObj) => {
+    if (!gameObj || !gameObj.teams) return teamName;
+    const away = gameObj.teams.away?.team;
+    const home = gameObj.teams.home?.team;
+    if (away && normalizeName(away.name) === normalizeName(teamName)) {
+      return away.teamName || away.name;
+    }
+    if (home && normalizeName(home.name) === normalizeName(teamName)) {
+      return home.teamName || home.name;
+    }
+    return teamName;
+  };
+
+  const winnerDisplay = getTeamNickname(projection.favorite, projection.game);
+  const handicapDisplay = projection.runLinePick;
+
   const cards = [
-    ["Ganador", projection.favorite, `${Math.round(projection.winProbability * 100)}%`],
+    ["Ganador", winnerDisplay, `${Math.round(projection.winProbability * 100)}%`],
     ["Carreras", projection.totalRuns.toFixed(1), `${projection.awayName} ${projection.awayRuns} · ${projection.homeName} ${projection.homeRuns}`],
     ["Hits", projection.totalHits.toFixed(1), `${projection.awayName} ${projection.awayHits} · ${projection.homeName} ${projection.homeHits}`],
-    ["Handicap", projection.runLinePick, projection.confidence],
+    ["Handicap", handicapDisplay, projection.confidence],
   ];
 
   if (projection.weather) {
@@ -1578,21 +1704,209 @@ function renderSummary(projection) {
     const desc = translateWeatherDescription(weather.description || "Clima");
     const icon = weatherIconFromDescription(desc);
     const weatherLabel = `${icon} ${weather.temperature ?? "N/D"}°C`;
-    const weatherMeta = `${desc} · Viento ${weather.windSpeed ?? "N/D"} km/h · Humedad ${weather.humidity ?? "N/D"}%`;
-    cards.push(["Clima", weatherLabel, weatherMeta, getWeatherCardClasses(desc)]);
+    const rainProbText = (weather.precipitationProbability !== undefined && weather.precipitationProbability !== null) ? ` · Lluvia ${weather.precipitationProbability}%` : "";
+    const weatherMeta = `${desc} · Viento ${weather.windSpeed ?? "N/D"} km/h · Humedad ${weather.humidity ?? "N/D"}%${rainProbText}`;
+    cards.push(["Clima", weatherLabel, weatherMeta, getWeatherCardClasses(desc) + " sm:col-span-2"]);
   }
 
   els.summaryGrid.innerHTML = cards
     .map(
-      ([label, value, meta, classes]) => `
-        <article class="${classes || "rounded-lg border border-slate-800 bg-slate-950/40 p-4"}">
-          <p class="text-xs font-bold uppercase tracking-wide text-slate-400">${label}</p>
-          <p class="mt-2 truncate text-2xl font-black text-white">${value}</p>
-          <p class="mt-1 text-sm font-semibold text-slate-300">${meta}</p>
-        </article>
-      `
+      ([label, value, meta, customClasses]) => {
+        const baseClasses = "rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-4 shadow-panel dark:shadow-panel-dark";
+        let finalClasses = baseClasses;
+        if (customClasses) {
+          if (customClasses.includes("border") || customClasses.includes("from-")) {
+            finalClasses = customClasses;
+          } else {
+            finalClasses = `${baseClasses} ${customClasses}`;
+          }
+        }
+        
+        // Dynamically adjust font size to avoid overflow of long team names
+        const valStr = String(value);
+        let fontSizeClass = "text-2xl sm:text-3xl";
+        if (valStr.length > 20) {
+          fontSizeClass = "text-sm sm:text-base";
+        } else if (valStr.length > 14) {
+          fontSizeClass = "text-base sm:text-lg";
+        } else if (valStr.length > 10) {
+          fontSizeClass = "text-lg sm:text-xl";
+        }
+        
+        return `
+          <article class="${finalClasses}">
+            <p class="truncate ${fontSizeClass} font-sports font-black text-black dark:text-white leading-none tracking-wider uppercase" title="${escapeHtml(value)}">${value}</p>
+            <p class="mt-1.5 text-[10px] sm:text-xs font-bold tracking-widest uppercase text-slate-700 dark:text-slate-200 font-sans">${label}</p>
+            <p class="mt-2 text-xs font-semibold text-slate-900 dark:text-slate-100 font-sans">${meta}</p>
+          </article>
+        `;
+      }
     )
     .join("");
+}
+
+const MLB_TEAM_ICONIC_COLORS = {
+  "boston red sox": "#bd3039",
+  "bos": "#bd3039",
+  "san francisco giants": "#fd5a1e",
+  "sf": "#fd5a1e",
+  "oakland athletics": "#003831",
+  "oak": "#003831",
+  "detroit tigers": "#fa4616",
+  "det": "#fa4616",
+  "baltimore orioles": "#df4601",
+  "bal": "#df4601",
+  "houston astros": "#eb6e1f",
+  "hou": "#eb6e1f",
+  "colorado rockies": "#33006f",
+  "col": "#33006f",
+  "milwaukee brewers": "#ffc52f",
+  "mil": "#ffc52f",
+  "pittsburgh pirates": "#fdb827",
+  "pit": "#fdb827",
+  "st louis cardinals": "#c41e3a",
+  "stl": "#c41e3a",
+  "cincinnati reds": "#c6011f",
+  "cin": "#c6011f",
+  "cleveland guardians": "#e31937",
+  "cle": "#e31937",
+  "chicago cubs": "#0e3386",
+  "chc": "#0e3386",
+  "los angeles dodgers": "#005a9c",
+  "lad": "#005a9c",
+  "new york mets": "#ff5910",
+  "nym": "#ff5910",
+  "philadelphia phillies": "#e81828",
+  "phi": "#e81828",
+  "washington nationals": "#ab0003",
+  "wsh": "#ab0003",
+  "arizona diamondbacks": "#a71930",
+  "ari": "#a71930",
+  "toronto blue jays": "#134a8e",
+  "tor": "#134a8e",
+  "tampa bay rays": "#8fbce6",
+  "tb": "#8fbce6",
+  "seattle mariners": "#005c5c",
+  "sea": "#005c5c",
+  "miami marlins": "#00a3e0",
+  "mia": "#00a3e0"
+};
+
+function getTeamColor(colorHex, isHome, alternateColorHex, teamName = "", abbreviation = "") {
+  const sanitize = (hex) => {
+    if (!hex) return "";
+    return hex.startsWith('#') ? hex.slice(1) : hex;
+  };
+  const nameKey = String(teamName || "").toLowerCase().trim();
+  const abbrevKey = String(abbreviation || "").toLowerCase().trim();
+  
+  const isDarkTheme = document.documentElement.classList.contains("dark");
+  if (nameKey === "tampa bay rays" || abbrevKey === "tb") {
+    return isDarkTheme ? "#8fbce6" : "#092c5c";
+  }
+
+  if (MLB_TEAM_ICONIC_COLORS[nameKey]) return MLB_TEAM_ICONIC_COLORS[nameKey];
+  if (MLB_TEAM_ICONIC_COLORS[abbrevKey]) return MLB_TEAM_ICONIC_COLORS[abbrevKey];
+
+  const c = sanitize(colorHex);
+  const alt = sanitize(alternateColorHex);
+  if (!c || c.toLowerCase() === "ffffff") {
+    if (alt && alt.toLowerCase() !== "ffffff") {
+      return '#' + alt;
+    }
+    return isHome ? '#0f172a' : '#0a2351';
+  }
+  return '#' + c;
+}
+
+function renderPredictor(projection) {
+  if (!els.predictorCardContent) return;
+
+  const isHomeFavorite = (projection.favorite === projection.homeName);
+  const homePct = isHomeFavorite ? (projection.winProbability * 100) : ((1 - projection.winProbability) * 100);
+  const awayPct = isHomeFavorite ? ((1 - projection.winProbability) * 100) : (projection.winProbability * 100);
+
+  const awayLogo = projection.game.teams.away.team.id ? mlbTeamLogoUrl(projection.game.teams.away.team.id) : "";
+  const homeLogo = projection.game.teams.home.team.id ? mlbTeamLogoUrl(projection.game.teams.home.team.id) : "";
+
+  const awayColor = getTeamColor(
+    projection.awayColor,
+    false,
+    projection.awayAlternateColor,
+    projection.game.teams.away.team.name,
+    projection.awayAbbreviation
+  );
+  const homeColor = getTeamColor(
+    projection.homeColor,
+    true,
+    projection.homeAlternateColor,
+    projection.game.teams.home.team.name,
+    projection.homeAbbreviation
+  );
+
+  const R = 75;
+  const C = 2 * Math.PI * R; // 471.24
+  const offset = 0.0125 * C; // 5.89 (1.25% gap at boundaries)
+  const homeLength = Math.max(0, (homePct - 2.5) / 100 * C);
+  const awayLength = Math.max(0, (awayPct - 2.5) / 100 * C);
+
+  els.predictorCardContent.innerHTML = `
+    <div class="flex flex-col items-center gap-2 pt-3 pb-1 relative z-10">
+      <!-- Graphic area -->
+      <div class="relative w-36 h-36 flex items-center justify-center">
+        <!-- Percentages -->
+        <div class="absolute top-[-12px] left-[-12px] text-black dark:text-white font-black text-xl tracking-tight select-none">
+          ${round1(awayPct)}<span class="text-xs font-bold ml-0.5 text-slate-700 dark:text-slate-200">%</span>
+        </div>
+        <div class="absolute bottom-[-12px] right-[-12px] text-black dark:text-white font-black text-xl tracking-tight select-none">
+          ${round1(homePct)}<span class="text-xs font-bold ml-0.5 text-slate-700 dark:text-slate-200">%</span>
+        </div>
+
+        <!-- SVG Ring -->
+        <svg class="w-32 h-32 select-none" viewBox="0 0 200 200">
+          <!-- Background track circle -->
+          <circle cx="100" cy="100" r="${R}" stroke="currentColor" class="text-slate-200 dark:text-slate-800" stroke-width="14" fill="none" />
+          
+          <!-- Away segment (left side, scaleX(-1) flips it) -->
+          <circle 
+            cx="100" 
+            cy="100" 
+            r="${R}" 
+            stroke="${awayColor}" 
+            stroke-width="14" 
+            fill="none" 
+            stroke-dasharray="${awayLength} ${C}" 
+            stroke-dashoffset="-${offset}"
+            style="transform: scaleX(-1) rotate(-90deg); transform-origin: 100px 100px; transition: stroke-dasharray 0.5s ease;"
+          />
+          <!-- Home segment (right side, normal clockwise) -->
+          <circle 
+            cx="100" 
+            cy="100" 
+            r="${R}" 
+            stroke="${homeColor}" 
+            stroke-width="14" 
+            fill="none" 
+            stroke-dasharray="${homeLength} ${C}" 
+            stroke-dashoffset="-${offset}"
+            style="transform: rotate(-90deg); transform-origin: 100px 100px; transition: stroke-dasharray 0.5s ease;"
+          />
+        </svg>
+
+        <!-- Inner Logos and Separator -->
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div class="flex items-center justify-center gap-2">
+            <img src="${awayLogo}" alt="${projection.awayName}" class="w-8 h-8 object-contain img-smooth" onerror="this.style.display='none'" />
+            <div class="w-[1px] h-6 bg-slate-300 dark:bg-slate-700"></div>
+            <img src="${homeLogo}" alt="${projection.homeName}" class="w-8 h-8 object-contain img-smooth" onerror="this.style.display='none'" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Label below chart -->
+      <p class="mt-6 text-[10px] italic text-slate-800 dark:text-slate-200 font-medium tracking-wide">Según Analytics</p>
+    </div>
+  `;
 }
 
 function translateWeatherDescription(description) {
@@ -1602,7 +1916,7 @@ function translateWeatherDescription(description) {
   if (/nieve|snow|sleet|granizo/.test(desc)) return "Nevado";
   if (/nublado|cloudy|overcast/.test(desc)) return "Nublado";
   if (/niebla|fog|mist/.test(desc)) return "Con niebla";
-  if (/soleado|sunny|clear/.test(desc)) return "Soleado";
+  if (/soleado|sunny|clear|despejado/.test(desc)) return "Soleado";
   if (/parcialmente|partly/.test(desc)) return "Parcialmente nublado";
   return description.charAt(0).toUpperCase() + description.slice(1);
 }
@@ -1611,22 +1925,34 @@ function weatherIconFromDescription(description) {
   const desc = String(description || "").toLowerCase();
   if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "⛈️";
   if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "🌧️";
-  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "🌨️";
+  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "❄️";
   if (/nublado|cloudy|overcast/.test(desc)) return "☁️";
   if (/niebla|fog|mist/.test(desc)) return "🌫️";
-  if (/soleado|sunny|clear/.test(desc)) return "☀️";
+  if (/soleado|sunny|clear|despejado/.test(desc)) return "☀️";
   return "⛅";
 }
 
 function getWeatherCardClasses(description) {
   const desc = String(description || "").toLowerCase();
-  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "rounded-lg border border-rose-900 bg-rose-950/20 p-4 shadow-sm";
-  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "rounded-lg border border-sky-900 bg-sky-950/20 p-4 shadow-sm";
-  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "rounded-lg border border-indigo-900 bg-indigo-950/20 p-4 shadow-sm";
-  if (/nublado|cloudy|overcast/.test(desc)) return "rounded-lg border border-slate-800 bg-slate-900/40 p-4 shadow-sm";
-  if (/niebla|fog|mist/.test(desc)) return "rounded-lg border border-amber-900 bg-amber-950/20 p-4 shadow-sm";
-  if (/soleado|sunny|clear/.test(desc)) return "rounded-lg border border-emerald-900 bg-emerald-950/20 p-4 shadow-sm";
-  return "rounded-lg border border-slate-800 bg-slate-900/40 p-4 shadow-sm";
+  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) {
+    return "rounded-lg border border-rose-200 dark:border-rose-700 bg-gradient-to-br from-rose-50 to-white dark:from-rose-900 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) {
+    return "rounded-lg border border-sky-200 dark:border-sky-700 bg-gradient-to-br from-sky-50 to-white dark:from-sky-900 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) {
+    return "rounded-lg border border-indigo-200 dark:border-indigo-700 bg-gradient-to-br from-indigo-50 to-white dark:from-indigo-900 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  if (/nublado|cloudy|overcast/.test(desc)) {
+    return "rounded-lg border border-slate-200 dark:border-slate-600 bg-gradient-to-br from-slate-100 to-white dark:from-slate-700 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  if (/niebla|fog|mist/.test(desc)) {
+    return "rounded-lg border border-amber-200 dark:border-amber-700 bg-gradient-to-br from-amber-50 to-white dark:from-amber-900 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  if (/soleado|sunny|clear|despejado/.test(desc)) {
+    return "rounded-lg border border-yellow-200 dark:border-yellow-750 bg-gradient-to-br from-yellow-50 to-white dark:from-yellow-900 dark:to-slate-800 p-4 shadow-panel dark:shadow-panel-dark";
+  }
+  return "rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-4 shadow-panel dark:shadow-panel-dark";
 }
 
 function renderPitchers(projection) {
@@ -1636,17 +1962,17 @@ function renderPitchers(projection) {
   const homeTeam = projection.game.teams.home.team;
 
   els.pitcherGrid.innerHTML = `
-    <section class="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
+    <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
       <div class="px-4 pt-4">
-        <h3 class="text-base font-black text-white">Lanzadores Probables</h3>
-        <div class="mt-3 border-t border-dotted border-slate-800"></div>
+        <h3 class="text-base font-black text-slate-900 dark:text-white">Lanzadores Probables</h3>
+        <div class="mt-3 border-t border-dotted border-slate-200 dark:border-slate-800"></div>
       </div>
 
       <div class="grid grid-cols-[1fr_auto_1fr] items-start gap-2 px-4 py-4">
         ${teamPitcherSide("left", away, awayTeam)}
         <div class="min-w-[86px] text-center">
-          <p class="text-xs font-black text-slate-300">Lanzadores</p>
-          <div class="mt-4 flex items-center justify-center gap-2 text-xs font-semibold text-slate-400">
+          <p class="text-xs font-black text-slate-800 dark:text-slate-200">Lanzadores</p>
+          <div class="mt-4 flex items-center justify-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
             <span>${pitcherHeadshot(away, "left")}</span>
             <span>vs</span>
             <span>${pitcherHeadshot(home, "right")}</span>
@@ -1655,9 +1981,9 @@ function renderPitchers(projection) {
         ${teamPitcherSide("right", home, homeTeam)}
       </div>
 
-      <div class="overflow-x-auto border-t border-slate-800">
+      <div class="overflow-x-auto border-t border-slate-100 dark:border-slate-800">
         <table class="w-full min-w-[680px] text-left text-xs">
-          <thead class="bg-slate-950/60 text-[11px] font-black uppercase tracking-wide text-slate-400 border-b border-slate-800">
+          <thead class="bg-slate-50 dark:bg-slate-900/80 text-[11px] font-black uppercase tracking-wide text-slate-850 dark:text-slate-200 border-b border-slate-200 dark:border-slate-800">
             <tr>
               <th class="px-3 py-2">Jugador</th>
               <th class="px-3 py-2 text-center">W-L</th>
@@ -1670,7 +1996,7 @@ function renderPitchers(projection) {
               <th class="px-3 py-2 text-center">HR</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-800/50">
+          <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
             ${pitcherTableRow(away)}
             ${pitcherTableRow(home)}
           </tbody>
@@ -1678,6 +2004,126 @@ function renderPitchers(projection) {
       </div>
     </section>
   `;
+}
+
+function renderBullpens(projection) {
+  const awayTeam = projection.game.teams.away.team;
+  const homeTeam = projection.game.teams.home.team;
+  const awayRelievers = projection.awayBullpenRoster || [];
+  const homeRelievers = projection.homeBullpenRoster || [];
+
+  if (!awayRelievers.length && !homeRelievers.length) return;
+
+  const awayLogo = mlbTeamLogoUrl(awayTeam.id);
+  const homeLogo = mlbTeamLogoUrl(homeTeam.id);
+  const awayName = projection.awayName;
+  const homeName = projection.homeName;
+
+  function bullpenTable(relievers, teamName, teamLogo, side) {
+    const borderColor = side === "away"
+      ? "border-sky-200 dark:border-sky-800/50"
+      : "border-violet-200 dark:border-violet-800/50";
+    const headerBg = side === "away"
+      ? "bg-sky-50 dark:bg-sky-950/20"
+      : "bg-violet-50 dark:bg-violet-950/20";
+    const headerText = side === "away"
+      ? "text-sky-800 dark:text-sky-300"
+      : "text-violet-800 dark:text-violet-300";
+    const roleTag = (r) => {
+      if (r.saves >= 3) return `<span class="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 text-[9px] font-black text-amber-800 dark:text-amber-300 uppercase tracking-wide ml-1">CL</span>`;
+      if (r.holds >= 3) return `<span class="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 px-1.5 py-0.5 text-[9px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wide ml-1">SU</span>`;
+      return "";
+    };
+    const handBadge = (h) => h === "L"
+      ? `<span class="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-black bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700">L</span>`
+      : `<span class="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-black bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">R</span>`;
+    const eraColor = (era) => {
+      if (!Number.isFinite(era)) return "text-slate-700 dark:text-slate-300";
+      if (era <= 2.50) return "text-emerald-700 dark:text-emerald-400 font-black";
+      if (era <= 3.50) return "text-sky-700 dark:text-sky-400 font-bold";
+      if (era >= 5.00) return "text-rose-700 dark:text-rose-400 font-bold";
+      return "text-slate-800 dark:text-slate-200";
+    };
+
+    const rows = relievers.length
+      ? relievers.map((r) => `
+        <tr class="odd:bg-white dark:odd:bg-slate-900/20 even:bg-slate-50/60 dark:even:bg-slate-900/40 hover:bg-blue-50 dark:hover:bg-slate-800/50">
+          <td class="px-3 py-1.5 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+            ${r.jersey ? `<span class="text-slate-500 dark:text-slate-400 mr-1">#${escapeHtml(r.jersey)}</span>` : ""}
+            ${escapeHtml(r.name)}
+            ${roleTag(r)}
+          </td>
+          <td class="px-2 py-1.5 text-center">${handBadge(r.hand)}</td>
+          <td class="px-3 py-1.5 text-center font-mono ${eraColor(r.era)}">${Number.isFinite(r.era) ? r.era.toFixed(2) : "N/D"}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-slate-800 dark:text-slate-200">${Number.isFinite(r.whip) ? r.whip.toFixed(2) : "N/D"}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-slate-800 dark:text-slate-200">${escapeHtml(r.inningsDisplay)}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-slate-700 dark:text-slate-300">${Number.isFinite(r.k9) ? r.k9.toFixed(1) : "N/D"}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-amber-700 dark:text-amber-400 font-bold">${r.saves}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-slate-700 dark:text-slate-300">${r.holds}</td>
+          <td class="px-3 py-1.5 text-center font-mono text-slate-600 dark:text-slate-400">${r.games}</td>
+        </tr>
+      `).join("")
+      : `<tr><td colspan="9" class="px-3 py-4 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">Sin datos de bullpen disponibles</td></tr>`;
+
+    return `
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 px-3 py-2 ${headerBg} border-b ${borderColor}">
+          <img src="${escapeHtml(teamLogo)}" alt="${escapeHtml(teamName)}" class="h-5 w-5 object-contain img-smooth" onerror="this.style.display='none'" />
+          <span class="text-xs font-black uppercase tracking-wider ${headerText}">${escapeHtml(teamName)}</span>
+          <span class="ml-auto text-[10px] font-bold text-slate-500 dark:text-slate-400">${relievers.length} relevistas</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[420px] text-left text-xs">
+            <thead class="bg-slate-50 dark:bg-slate-900/80 text-[10px] font-black uppercase tracking-wide text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th class="px-3 py-1.5">Jugador</th>
+                <th class="px-2 py-1.5 text-center">M</th>
+                <th class="px-3 py-1.5 text-center">ERA</th>
+                <th class="px-3 py-1.5 text-center">WHIP</th>
+                <th class="px-3 py-1.5 text-center">IP</th>
+                <th class="px-3 py-1.5 text-center">K/9</th>
+                <th class="px-3 py-1.5 text-center">SV</th>
+                <th class="px-3 py-1.5 text-center">HLD</th>
+                <th class="px-3 py-1.5 text-center">G</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+              ${rows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  const bullpenSection = document.createElement("section");
+  bullpenSection.id = "bullpenSection";
+  bullpenSection.className = "overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark";
+  bullpenSection.innerHTML = `
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+      <div class="flex items-center gap-2">
+        <h3 class="text-sm font-black uppercase tracking-wide text-slate-900 dark:text-white">Bullpens</h3>
+        <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">Temporada ${new Date().getFullYear()}</span>
+      </div>
+      <div class="flex items-center gap-1 text-[10px] font-bold text-slate-500 dark:text-slate-400">
+        <span class="inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 text-[9px] font-black text-amber-800 dark:text-amber-300">CL</span> Closer
+        <span class="mx-1.5 text-slate-300 dark:text-slate-700">·</span>
+        <span class="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 px-1.5 py-0.5 text-[9px] font-black text-emerald-800 dark:text-emerald-300">SU</span> Setup
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-100 dark:divide-slate-800">
+      ${bullpenTable(awayRelievers, awayName, awayLogo, "away")}
+      ${bullpenTable(homeRelievers, homeName, homeLogo, "home")}
+    </div>
+  `;
+
+  // Insert right after the pitcherGrid section
+  const existingBullpen = document.getElementById("bullpenSection");
+  if (existingBullpen) {
+    existingBullpen.replaceWith(bullpenSection);
+  } else {
+    els.pitcherGrid.insertAdjacentElement("afterend", bullpenSection);
+  }
 }
 
 function teamPitcherSide(align, pitcher, team) {
@@ -1692,11 +2138,11 @@ function teamPitcherSide(align, pitcher, team) {
     <div class="min-w-0">
       <div class="flex items-center gap-2 ${flexDirection}">
         ${teamLogo(team, pitcher)}
-        <span class="text-xs font-semibold uppercase text-slate-400">${escapeHtml(pitcher?.teamAbbreviation || teamAbbrev(teamName))}</span>
+        <span class="text-xs font-semibold uppercase text-slate-700 dark:text-slate-300">${escapeHtml(pitcher?.teamAbbreviation || teamAbbrev(teamName))}</span>
       </div>
       <div class="mt-6 ${isRight ? "text-right" : ""}">
-        <p class="truncate text-sm font-medium text-slate-100">${escapeHtml(pitcherName)}</p>
-        <p class="mt-0.5 text-xs font-semibold text-slate-400">${escapeHtml(throws)}${escapeHtml(jersey)}</p>
+        <p class="truncate text-sm font-medium text-slate-900 dark:text-white">${escapeHtml(pitcherName)}</p>
+        <p class="mt-0.5 text-xs font-semibold text-slate-750 dark:text-slate-200">${escapeHtml(throws)}${escapeHtml(jersey)}</p>
       </div>
     </div>
   `;
@@ -1705,11 +2151,11 @@ function teamPitcherSide(align, pitcher, team) {
 function pitcherHeadshot(pitcher, align) {
   const headshot = pitcherHeadshotUrl(pitcher);
   if (headshot) {
-    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 bg-white object-cover img-smooth ${align === "left" ? "-mr-1" : "-ml-1"}" loading="lazy" />`;
+    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-14 w-14 rounded-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 object-cover img-smooth ${align === "left" ? "-mr-1" : "-ml-1"}" loading="lazy" />`;
   }
 
   return `
-    <span class="flex h-14 w-14 items-center justify-center rounded-full border border-slate-300 bg-slate-100 text-xs font-black text-slate-500 ${align === "left" ? "-mr-1" : "-ml-1"}">
+    <span class="flex h-14 w-14 items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-xs font-black text-slate-700 dark:text-slate-200 ${align === "left" ? "-mr-1" : "-ml-1"}">
       ${escapeHtml(initials(pitcher?.name || ""))}
     </span>
   `;
@@ -1718,24 +2164,24 @@ function pitcherHeadshot(pitcher, align) {
 function pitcherTableRow(pitcher) {
   if (!pitcher) {
     return `
-      <tr class="bg-slate-900/40">
-        <td class="px-3 py-2 font-semibold text-slate-400">Abridor N/D</td>
-        <td class="px-3 py-2 text-center text-slate-500" colspan="8">ESPN no publico datos del lanzador probable.</td>
+      <tr class="bg-slate-50 dark:bg-slate-900/40">
+        <td class="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Abridor N/D</td>
+        <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-205" colspan="8">ESPN no publico datos del lanzador probable.</td>
       </tr>
     `;
   }
 
   return `
-    <tr class="odd:bg-slate-900/20 even:bg-slate-950/20 hover:bg-slate-900/40 border-b border-slate-800/40">
-      <td class="px-3 py-2 font-semibold text-sky-400">${escapeHtml(pitcher.name)}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatWinLoss(pitcher))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatStat(pitcher.era, 2))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(pitcher.inningsDisplay || formatStat(pitcher.innings, 1))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.hits))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.strikeouts))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.walks))}</td>
-      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.homeRuns))}</td>
+    <tr class="odd:bg-white dark:odd:bg-slate-900/20 even:bg-slate-50 dark:even:bg-slate-900/40 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
+      <td class="px-3 py-2 font-semibold text-sky-850 dark:text-sky-300">${escapeHtml(pitcher.name)}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatWinLoss(pitcher))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatStat(pitcher.era, 2))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(pitcher.inningsDisplay || formatStat(pitcher.innings, 1))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.hits))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.strikeouts))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.walks))}</td>
+      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.homeRuns))}</td>
     </tr>
   `;
 }
@@ -1747,7 +2193,7 @@ function teamLogo(team, pitcher) {
     return `<img src="${escapeHtml(logo)}" alt="${escapeHtml(teamName)}" class="h-6 w-6 object-contain img-smooth" loading="lazy" />`;
   }
 
-  return `<span class="flex h-6 w-6 items-center justify-center text-xs font-black text-slate-700">${escapeHtml(teamAbbrev(teamName).slice(0, 1))}</span>`;
+  return `<span class="flex h-6 w-6 items-center justify-center text-xs font-black text-slate-700 dark:text-slate-300">${escapeHtml(teamAbbrev(teamName).slice(0, 1))}</span>`;
 }
 
 function renderResults(projection) {
@@ -1756,19 +2202,19 @@ function renderResults(projection) {
       (row) => {
         let outcomeBadge = "";
         if (row.outcome === "HIT") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-950/40 border border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-400">✓ ACERTADO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-850 dark:text-emerald-350">✓ ACERTADO</span>`;
         } else if (row.outcome === "MISS") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-950/40 border border-rose-800 px-2 py-0.5 text-xs font-bold text-rose-400">✗ FALLADO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-100 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 px-2 py-0.5 text-xs font-bold text-rose-850 dark:text-rose-350">✗ FALLADO</span>`;
         } else if (row.outcome === "PUSH") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-900 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">⟷ DEVUELTO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-800 dark:text-slate-200">⟷ DEVUELTO</span>`;
         }
         return `
-          <tr class="bg-slate-900/10 hover:bg-slate-900/40 border-b border-slate-800/40">
-            <td class="px-4 py-4 font-bold text-white">${row.market}</td>
-            <td class="px-4 py-4 font-semibold text-emerald-400">${row.pick}${outcomeBadge}</td>
-            <td class="px-4 py-4 font-semibold text-slate-200">${row.estimate}</td>
+          <tr class="bg-white dark:bg-slate-900/20 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
+            <td class="px-4 py-4 font-bold text-slate-900 dark:text-slate-100">${row.market}</td>
+            <td class="px-4 py-4 font-semibold text-emerald-850 dark:text-emerald-300">${row.pick}${outcomeBadge}</td>
+            <td class="px-4 py-4 font-semibold text-slate-900 dark:text-slate-100">${row.estimate}</td>
             <td class="px-4 py-4">${confidenceBadge(row.confidence)}</td>
-            <td class="px-4 py-4 text-slate-400">${row.base}</td>
+            <td class="px-4 py-4 text-slate-750 dark:text-slate-250">${row.base}</td>
           </tr>
         `;
       }
@@ -1777,10 +2223,20 @@ function renderResults(projection) {
 }
 
 function clearResults(clearHeader = true) {
+  state.activeProjection = null;
   els.summaryGrid.innerHTML = "";
-  els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-800 bg-slate-900/40 p-5 text-center text-sm font-semibold text-slate-400 backdrop-blur-sm shadow-2xl">Compara un partido para ver los abridores y sus estadisticas.</div>`;
-  els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-400">Aún no hay comparación.</td></tr>`;
+  els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 text-center text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-panel dark:shadow-panel-dark">Compara un partido para ver los abridores y sus estadisticas.</div>`;
+  els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-700 dark:text-slate-200">Aún no hay comparación.</td></tr>`;
   els.sourceBadge.textContent = "Sin datos";
+  const existingBullpen = document.getElementById("bullpenSection");
+  if (existingBullpen) existingBullpen.remove();
+  if (els.predictorCardContent) {
+    els.predictorCardContent.innerHTML = `
+      <div class="flex-1 flex flex-col items-center justify-center py-6 text-center text-sm font-semibold text-slate-700 dark:text-slate-200">
+        Compara un partido para ver la probabilidad de victoria.
+      </div>
+    `;
+  }
   if (clearHeader) renderMatchupHeader(getSelectedGame());
 }
 
@@ -1916,6 +2372,8 @@ function extractEspnTeams(event) {
     result[side] = {
       abbreviation: competitor.team?.abbreviation || "",
       logo: competitor.team?.logo || "",
+      color: competitor.team?.color || "",
+      alternateColor: competitor.team?.alternateColor || "",
     };
   });
   return result;
@@ -1953,10 +2411,10 @@ function setBusy(isBusy, message) {
 
 function setStatus(message, tone = "neutral") {
   const classes = {
-    neutral: "border-b border-slate-800 bg-slate-950/60 px-4 py-3 text-sm font-semibold text-slate-300",
-    ok: "border-b border-slate-800 bg-emerald-950/20 px-4 py-3 text-sm font-semibold text-emerald-400",
-    warn: "border-b border-slate-800 bg-amber-950/20 px-4 py-3 text-sm font-semibold text-amber-400",
-    error: "border-b border-slate-800 bg-rose-950/20 px-4 py-3 text-sm font-semibold text-rose-400",
+    neutral: "border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-4 py-3 text-sm font-semibold text-slate-650 dark:text-slate-300",
+    ok: "border-b border-emerald-100 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/20 px-4 py-3 text-sm font-semibold text-emerald-700 dark:text-emerald-400",
+    warn: "border-b border-amber-100 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm font-semibold text-amber-700 dark:text-amber-400",
+    error: "border-b border-rose-100 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/20 px-4 py-3 text-sm font-semibold text-rose-700 dark:text-rose-400",
   };
   els.statusBox.className = classes[tone] || classes.neutral;
   els.statusBox.textContent = message;
@@ -1976,7 +2434,7 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
   try {
     const dateUtc = new Date(gameDate);
     const startDate = dateUtc.toISOString().slice(0, 10);
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.latitude}&longitude=${stadium.longitude}&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,weathercode&start_date=${startDate}&end_date=${startDate}&timezone=UTC`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.latitude}&longitude=${stadium.longitude}&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation_probability,weathercode&start_date=${startDate}&end_date=${startDate}&timezone=UTC`;
     const data = await fetchJson(url);
     const weather = pickOpenMeteoWeather(data, dateUtc);
     if (!weather) return null;
@@ -1988,6 +2446,7 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
       description: weather.description,
       windSpeed: weather.windSpeed,
       humidity: weather.humidity,
+      precipitationProbability: weather.precipitationProbability,
       link: "https://open-meteo.com/",
       source: "Open-Meteo",
       venue: venueName,
@@ -2006,6 +2465,7 @@ function pickOpenMeteoWeather(data, dateUtc) {
   const humidities = data?.hourly?.relativehumidity_2m || [];
   const windSpeeds = data?.hourly?.windspeed_10m || [];
   const weatherCodes = data?.hourly?.weathercode || [];
+  const rainProbs = data?.hourly?.precipitation_probability || [];
   if (!times.length || !temperatures.length || !humidities.length || !windSpeeds.length) return null;
 
   const targetTime = dateUtc.toISOString().slice(0, 16) + ":00";
@@ -2029,6 +2489,7 @@ function pickOpenMeteoWeather(data, dateUtc) {
     lowTemperature: number(lowTemperature),
     windSpeed: number(windSpeeds[index]),
     humidity: number(humidities[index]),
+    precipitationProbability: rainProbs[index] !== undefined ? number(rainProbs[index]) : null,
     description: openMeteoWeatherCodeToDescription(code),
   };
 }
@@ -2078,12 +2539,12 @@ function obtenerParkFactor(game = {}) {
 function confidenceBadge(value) {
   const tone =
     value === "Alta"
-      ? "bg-emerald-100 text-emerald-800"
+      ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-400 border border-transparent dark:border-emerald-800/40"
       : value === "Media"
-        ? "bg-sky-100 text-sky-800"
+        ? "bg-sky-100 dark:bg-sky-950/40 text-sky-800 dark:text-sky-400 border border-transparent dark:border-sky-800/40"
         : value === "Referencia"
-          ? "bg-slate-100 text-slate-700"
-          : "bg-amber-100 text-amber-900";
+          ? "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-transparent dark:border-slate-700/40"
+          : "bg-amber-100 dark:bg-amber-950/40 text-amber-900 dark:text-amber-400 border border-transparent dark:border-amber-800/40";
   return `<span class="inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${tone}">${value}</span>`;
 }
 
@@ -2343,11 +2804,11 @@ function pitcherModelLine(pitcher) {
 function pitcherImage(pitcher) {
   const headshot = pitcherHeadshotUrl(pitcher);
   if (headshot) {
-    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 bg-white object-cover img-smooth" loading="lazy" />`;
+    return `<img src="${escapeHtml(headshot)}" alt="${escapeHtml(pitcher.name)}" class="h-16 w-16 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 object-cover img-smooth" loading="lazy" />`;
   }
 
   return `
-    <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-lg font-black text-slate-500">
+    <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-lg font-black text-slate-500 dark:text-slate-400">
       ${escapeHtml(initials(pitcher.name))}
     </div>
   `;
@@ -2401,7 +2862,7 @@ function mlbTeamLogoUrl(teamId) {
 }
 
 function mlbPitcherHeadshotUrl(playerId) {
-  return `https://img.mlbstatic.com/mlb-photos/image/upload/w_240,q_auto:best/v1/people/${playerId}/headshot/67/current`;
+  return `https://img.mlbstatic.com/mlb-photos/image/upload/w_360,q_auto:best,dpr_auto/v1/people/${playerId}/headshot/67/current`;
 }
 
 function pitcherHeadshotUrl(pitcher) {
@@ -2664,17 +3125,17 @@ function updateCalibrationBadge() {
   if (!els.calibrationBadge) return;
   const calInfo = obtenerCalibracion();
   if (calInfo.totalGames > 0) {
-    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800 transition-all";
+    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-800 dark:text-emerald-400 transition-all shadow-sm";
     els.calibrationBadge.textContent = `Auto-Ajuste: Carreras x${calInfo.runsBias.toFixed(2)}, Hits x${calInfo.hitsBias.toFixed(2)} (${calInfo.totalGames} G)`;
   } else {
-    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600 transition-all";
+    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-600 dark:text-slate-400 transition-all shadow-sm";
     els.calibrationBadge.textContent = "Auto-Ajuste: Neutro (Sin historial)";
   }
 }
 
 function updateCalibrationBadgeStatus(text) {
   if (!els.calibrationBadge) return;
-  els.calibrationBadge.className = "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 animate-pulse transition-all";
+  els.calibrationBadge.className = "inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-xs font-bold text-amber-800 dark:text-amber-400 animate-pulse transition-all shadow-sm";
   els.calibrationBadge.textContent = `Auto-Ajuste: ${text}`;
 }
 

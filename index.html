@@ -59,10 +59,10 @@
         /* gradient: dark left side fades to nearly transparent right – like the reference image */
         background: linear-gradient(
           to right,
-          rgba(245,247,251,0.97) 0%,
-          rgba(245,247,251,0.88) 40%,
-          rgba(245,247,251,0.55) 65%,
-          rgba(245,247,251,0.18) 100%
+          #060a13 0%,
+          rgba(6, 10, 19, 0.95) 30%,
+          rgba(6, 10, 19, 0.7) 65%,
+          rgba(6, 10, 19, 0.2) 100%
         );
       }
       body > #stadiumBg + * {
@@ -75,28 +75,28 @@
       }
     </style>
   </head>
-  <body class="min-h-screen bg-[#f5f7fb] text-slate-950 antialiased">
+  <body class="min-h-screen bg-[#060a13] text-slate-100 antialiased">
     <!-- Fixed stadium background (updated by JS on compare) -->
     <div id="stadiumBg" aria-hidden="true"></div>
     <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-      <header class="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-end lg:justify-between">
+      <header class="flex flex-col gap-4 border-b border-slate-800 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div class="flex flex-wrap items-center gap-2">
-            <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">MLB Stats API + ESPN MLB</p>
-            <span id="calibrationBadge" class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">Auto-Ajuste: Cargando...</span>
+            <p class="text-sm font-semibold uppercase tracking-wide text-emerald-400">MLB Stats API + ESPN MLB</p>
+            <span id="calibrationBadge" class="inline-flex items-center rounded-full bg-slate-900/60 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">Auto-Ajuste: Cargando...</span>
           </div>
-          <h1 class="mt-1 text-3xl font-bold text-slate-950 sm:text-4xl">Comparador MLB</h1>
+          <h1 class="mt-1 text-3xl font-bold text-white sm:text-4xl">Comparador MLB</h1>
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <label class="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm">
-            <i data-lucide="calendar-days" class="h-4 w-4 text-slate-500"></i>
+          <label class="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 shadow-sm">
+            <i data-lucide="calendar-days" class="h-4 w-4 text-slate-400"></i>
             <span class="sr-only">Fecha</span>
-            <input id="dateInput" type="date" class="bg-transparent text-sm font-semibold text-slate-900 outline-none" />
+            <input id="dateInput" type="date" class="bg-transparent text-sm font-semibold text-white outline-none [color-scheme:dark]" />
           </label>
           <button
             id="loadBtn"
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400"
+            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 border border-slate-800 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-700"
             type="button"
           >
             <i data-lucide="refresh-cw" class="h-4 w-4"></i>
@@ -106,24 +106,24 @@
       </header>
 
       <section class="grid flex-1 gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
-        <aside class="rounded-lg border border-slate-200 bg-white shadow-panel lg:sticky lg:top-5 lg:self-start">
-          <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-            <h2 class="text-sm font-bold uppercase tracking-wide text-slate-600">Partidos</h2>
-            <span id="gameCount" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">0</span>
+        <aside class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl lg:sticky lg:top-5 lg:self-start">
+          <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h2 class="text-sm font-bold uppercase tracking-wide text-slate-300">Partidos</h2>
+            <span id="gameCount" class="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-400">0</span>
           </div>
           <div id="gamesList" class="max-h-[calc(100vh-105px)] min-h-[360px] overflow-y-auto p-3"></div>
         </aside>
 
         <section class="flex min-w-0 flex-col gap-5">
-          <div class="rounded-lg border border-slate-200 bg-white shadow-panel">
-            <div class="flex flex-col gap-4 border-b border-slate-200 p-4 xl:flex-row xl:items-center xl:justify-between">
+          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
+            <div class="flex flex-col gap-4 border-b border-slate-800 p-4 xl:flex-row xl:items-center xl:justify-between">
               <div id="matchupHeader" class="min-h-14">
-                <p class="text-sm font-semibold text-slate-500">Selecciona un partido</p>
-                <h2 class="mt-1 text-2xl font-bold text-slate-950">Sin comparación</h2>
+                <p class="text-sm font-semibold text-slate-400">Selecciona un partido</p>
+                <h2 class="mt-1 text-2xl font-bold text-white">Sin comparación</h2>
               </div>
               <button
                 id="compareBtn"
-                class="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+                class="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
                 type="button"
                 disabled
               >
@@ -132,7 +132,7 @@
               </button>
             </div>
 
-            <div id="statusBox" class="border-b border-slate-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+            <div id="statusBox" class="border-b border-slate-800 bg-slate-950/60 px-4 py-3 text-sm font-semibold text-amber-400">
               Carga la jornada para comenzar.
             </div>
 
@@ -140,19 +140,19 @@
           </div>
 
           <div id="pitcherGrid">
-            <div class="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-semibold text-slate-500 shadow-panel">
+            <div class="rounded-lg border border-dashed border-slate-800 bg-slate-900/40 p-5 text-center text-sm font-semibold text-slate-400 backdrop-blur-sm shadow-2xl">
               Compara un partido para ver los abridores y sus estadisticas.
             </div>
           </div>
 
-          <div class="rounded-lg border border-slate-200 bg-white shadow-panel">
-            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h2 class="text-sm font-bold uppercase tracking-wide text-slate-600">Estimaciones</h2>
-              <span id="sourceBadge" class="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700">Sin datos</span>
+          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+              <h2 class="text-sm font-bold uppercase tracking-wide text-slate-300">Estimaciones</h2>
+              <span id="sourceBadge" class="rounded-full bg-sky-950/60 border border-sky-800/80 px-2.5 py-1 text-xs font-bold text-sky-400">Sin datos</span>
             </div>
             <div class="overflow-x-auto">
               <table class="w-full min-w-[760px] text-left text-sm">
-                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <thead class="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-400 border-b border-slate-800">
                   <tr>
                     <th class="px-4 py-3">Mercado</th>
                     <th class="px-4 py-3">Pronóstico</th>
@@ -161,17 +161,17 @@
                     <th class="px-4 py-3">Base</th>
                   </tr>
                 </thead>
-                <tbody id="resultsBody" class="divide-y divide-slate-100">
+                <tbody id="resultsBody" class="divide-y divide-slate-800/50">
                   <tr>
-                    <td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-500">Aún no hay comparación.</td>
+                    <td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-400">Aún no hay comparación.</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
 
-          <div class="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-panel">
-            <strong class="text-slate-900">Aviso:</strong> son proyecciones estadísticas automáticas con datos públicos. No garantizan resultados ni sustituyen gestión de riesgo.
+          <div class="rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md p-4 text-sm leading-6 text-slate-400 shadow-2xl">
+            <strong class="text-slate-200">Aviso:</strong> son proyecciones estadísticas automáticas con datos públicos. No garantizan resultados ni sustituyen gestión de riesgo.
           </div>
         </section>
       </section>

@@ -1422,22 +1422,22 @@ function renderGames() {
         <button
           class="mb-2 w-full rounded-lg border px-3 py-3 text-left transition ${
             selected
-              ? "border-emerald-500 bg-emerald-50 shadow-sm"
-              : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+              ? "border-emerald-500 bg-emerald-950/40 text-white shadow-sm"
+              : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900/40"
           }"
           type="button"
           data-game-pk="${game.gamePk}"
         >
           <div class="flex items-center justify-between gap-3">
-            <span class="text-xs font-bold uppercase tracking-wide text-slate-500">${time}</span>
-            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">${status}</span>
+            <span class="text-xs font-bold uppercase tracking-wide text-slate-400">${time}</span>
+            <span class="rounded-full bg-slate-900 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">${status}</span>
           </div>
-          <div class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-sm font-bold text-slate-950">
+          <div class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-sm font-bold text-white">
             <span class="truncate">${away.name}</span>
-            <span class="text-slate-400">@</span>
+            <span class="text-slate-500">@</span>
             <span class="truncate text-right">${home.name}</span>
           </div>
-          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
+          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
             <span class="truncate">${awayPitcherName}</span>
             <span class="truncate text-right">${homePitcherName}</span>
           </div>
@@ -1461,8 +1461,8 @@ function renderGames() {
 function renderMatchupHeader(game) {
   if (!game) {
     els.matchupHeader.innerHTML = `
-      <p class="text-sm font-semibold text-slate-500">Selecciona un partido</p>
-      <h2 class="mt-1 text-2xl font-bold text-slate-950">Sin comparación</h2>
+      <p class="text-sm font-semibold text-slate-400">Selecciona un partido</p>
+      <h2 class="mt-1 text-2xl font-bold text-white">Sin comparación</h2>
     `;
     return;
   }
@@ -1471,8 +1471,8 @@ function renderMatchupHeader(game) {
   const home = game.teams.home.team.name;
   const venue = game.venue?.name || "Estadio N/D";
   els.matchupHeader.innerHTML = `
-    <p class="text-sm font-semibold text-slate-500">${formatTime(game.gameDate)} · ${venue}</p>
-    <h2 class="mt-1 text-2xl font-bold text-slate-950">${away} @ ${home}</h2>
+    <p class="text-sm font-semibold text-slate-400">${formatTime(game.gameDate)} · ${venue}</p>
+    <h2 class="mt-1 text-2xl font-bold text-white">${away} @ ${home}</h2>
   `;
 }
 
@@ -1496,10 +1496,10 @@ function renderSummary(projection) {
   els.summaryGrid.innerHTML = cards
     .map(
       ([label, value, meta, classes]) => `
-        <article class="${classes || "rounded-lg border border-slate-200 bg-slate-50 p-4"}">
-          <p class="text-xs font-bold uppercase tracking-wide text-slate-500">${label}</p>
-          <p class="mt-2 truncate text-2xl font-black text-slate-950">${value}</p>
-          <p class="mt-1 text-sm font-semibold text-slate-500">${meta}</p>
+        <article class="${classes || "rounded-lg border border-slate-800 bg-slate-950/40 p-4"}">
+          <p class="text-xs font-bold uppercase tracking-wide text-slate-400">${label}</p>
+          <p class="mt-2 truncate text-2xl font-black text-white">${value}</p>
+          <p class="mt-1 text-sm font-semibold text-slate-300">${meta}</p>
         </article>
       `
     )
@@ -1531,13 +1531,13 @@ function weatherIconFromDescription(description) {
 
 function getWeatherCardClasses(description) {
   const desc = String(description || "").toLowerCase();
-  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "rounded-lg border border-slate-200 bg-rose-100 p-4 shadow-sm";
-  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "rounded-lg border border-slate-200 bg-sky-100 p-4 shadow-sm";
-  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "rounded-lg border border-slate-200 bg-indigo-100 p-4 shadow-sm";
-  if (/nublado|cloudy|overcast/.test(desc)) return "rounded-lg border border-slate-200 bg-slate-100 p-4 shadow-sm";
-  if (/niebla|fog|mist/.test(desc)) return "rounded-lg border border-slate-200 bg-amber-100 p-4 shadow-sm";
-  if (/soleado|sunny|clear/.test(desc)) return "rounded-lg border border-slate-200 bg-emerald-100 p-4 shadow-sm";
-  return "rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm";
+  if (/tormentoso|tormenta|rayos|thunder|storm/.test(desc)) return "rounded-lg border border-rose-900 bg-rose-950/20 p-4 shadow-sm";
+  if (/lluvioso|lluvia|rain|drizzle|showers|chubascos/.test(desc)) return "rounded-lg border border-sky-900 bg-sky-950/20 p-4 shadow-sm";
+  if (/nevado|nieve|snow|sleet|granizo/.test(desc)) return "rounded-lg border border-indigo-900 bg-indigo-950/20 p-4 shadow-sm";
+  if (/nublado|cloudy|overcast/.test(desc)) return "rounded-lg border border-slate-800 bg-slate-900/40 p-4 shadow-sm";
+  if (/niebla|fog|mist/.test(desc)) return "rounded-lg border border-amber-900 bg-amber-950/20 p-4 shadow-sm";
+  if (/soleado|sunny|clear/.test(desc)) return "rounded-lg border border-emerald-900 bg-emerald-950/20 p-4 shadow-sm";
+  return "rounded-lg border border-slate-800 bg-slate-900/40 p-4 shadow-sm";
 }
 
 function renderPitchers(projection) {
@@ -1547,16 +1547,16 @@ function renderPitchers(projection) {
   const homeTeam = projection.game.teams.home.team;
 
   els.pitcherGrid.innerHTML = `
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-panel">
+    <section class="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 backdrop-blur-md shadow-2xl">
       <div class="px-4 pt-4">
-        <h3 class="text-base font-black text-slate-900">Lanzadores Probables</h3>
-        <div class="mt-3 border-t border-dotted border-slate-300"></div>
+        <h3 class="text-base font-black text-white">Lanzadores Probables</h3>
+        <div class="mt-3 border-t border-dotted border-slate-800"></div>
       </div>
 
       <div class="grid grid-cols-[1fr_auto_1fr] items-start gap-2 px-4 py-4">
         ${teamPitcherSide("left", away, awayTeam)}
         <div class="min-w-[86px] text-center">
-          <p class="text-xs font-black text-slate-900">Lanzadores</p>
+          <p class="text-xs font-black text-slate-300">Lanzadores</p>
           <div class="mt-4 flex items-center justify-center gap-2 text-xs font-semibold text-slate-400">
             <span>${pitcherHeadshot(away, "left")}</span>
             <span>vs</span>
@@ -1566,9 +1566,9 @@ function renderPitchers(projection) {
         ${teamPitcherSide("right", home, homeTeam)}
       </div>
 
-      <div class="overflow-x-auto border-t border-slate-200">
+      <div class="overflow-x-auto border-t border-slate-800">
         <table class="w-full min-w-[680px] text-left text-xs">
-          <thead class="bg-slate-50 text-[11px] font-black uppercase tracking-wide text-slate-600">
+          <thead class="bg-slate-950/60 text-[11px] font-black uppercase tracking-wide text-slate-400 border-b border-slate-800">
             <tr>
               <th class="px-3 py-2">Jugador</th>
               <th class="px-3 py-2 text-center">W-L</th>
@@ -1581,7 +1581,7 @@ function renderPitchers(projection) {
               <th class="px-3 py-2 text-center">HR</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-100">
+          <tbody class="divide-y divide-slate-800/50">
             ${pitcherTableRow(away)}
             ${pitcherTableRow(home)}
           </tbody>
@@ -1603,11 +1603,11 @@ function teamPitcherSide(align, pitcher, team) {
     <div class="min-w-0">
       <div class="flex items-center gap-2 ${flexDirection}">
         ${teamLogo(team, pitcher)}
-        <span class="text-xs font-semibold uppercase text-slate-600">${escapeHtml(pitcher?.teamAbbreviation || teamAbbrev(teamName))}</span>
+        <span class="text-xs font-semibold uppercase text-slate-400">${escapeHtml(pitcher?.teamAbbreviation || teamAbbrev(teamName))}</span>
       </div>
       <div class="mt-6 ${isRight ? "text-right" : ""}">
-        <p class="truncate text-sm font-medium text-slate-900">${escapeHtml(pitcherName)}</p>
-        <p class="mt-0.5 text-xs font-semibold text-slate-500">${escapeHtml(throws)}${escapeHtml(jersey)}</p>
+        <p class="truncate text-sm font-medium text-slate-100">${escapeHtml(pitcherName)}</p>
+        <p class="mt-0.5 text-xs font-semibold text-slate-400">${escapeHtml(throws)}${escapeHtml(jersey)}</p>
       </div>
     </div>
   `;
@@ -1629,24 +1629,24 @@ function pitcherHeadshot(pitcher, align) {
 function pitcherTableRow(pitcher) {
   if (!pitcher) {
     return `
-      <tr class="bg-white">
-        <td class="px-3 py-2 font-semibold text-slate-500">Abridor N/D</td>
-        <td class="px-3 py-2 text-center text-slate-400" colspan="8">ESPN no publico datos del lanzador probable.</td>
+      <tr class="bg-slate-900/40">
+        <td class="px-3 py-2 font-semibold text-slate-400">Abridor N/D</td>
+        <td class="px-3 py-2 text-center text-slate-500" colspan="8">ESPN no publico datos del lanzador probable.</td>
       </tr>
     `;
   }
 
   return `
-    <tr class="odd:bg-white even:bg-slate-50">
-      <td class="px-3 py-2 font-semibold text-sky-700">${escapeHtml(pitcher.name)}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatWinLoss(pitcher))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatStat(pitcher.era, 2))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(pitcher.inningsDisplay || formatStat(pitcher.innings, 1))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatNullable(pitcher.hits))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatNullable(pitcher.strikeouts))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatNullable(pitcher.walks))}</td>
-      <td class="px-3 py-2 text-center text-slate-600">${escapeHtml(formatNullable(pitcher.homeRuns))}</td>
+    <tr class="odd:bg-slate-900/20 even:bg-slate-950/20 hover:bg-slate-900/40 border-b border-slate-800/40">
+      <td class="px-3 py-2 font-semibold text-sky-400">${escapeHtml(pitcher.name)}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatWinLoss(pitcher))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatStat(pitcher.era, 2))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(pitcher.inningsDisplay || formatStat(pitcher.innings, 1))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.hits))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.strikeouts))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.walks))}</td>
+      <td class="px-3 py-2 text-center text-slate-300">${escapeHtml(formatNullable(pitcher.homeRuns))}</td>
     </tr>
   `;
 }
@@ -1667,19 +1667,19 @@ function renderResults(projection) {
       (row) => {
         let outcomeBadge = "";
         if (row.outcome === "HIT") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">✓ ACERTADO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-950/40 border border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-400">✓ ACERTADO</span>`;
         } else if (row.outcome === "MISS") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-800">✗ FALLADO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-950/40 border border-rose-800 px-2 py-0.5 text-xs font-bold text-rose-400">✗ FALLADO</span>`;
         } else if (row.outcome === "PUSH") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-800">⟷ DEVUELTO</span>`;
+          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-900 border border-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">⟷ DEVUELTO</span>`;
         }
         return `
-          <tr class="bg-white">
-            <td class="px-4 py-4 font-bold text-slate-950">${row.market}</td>
-            <td class="px-4 py-4 font-semibold text-emerald-700">${row.pick}${outcomeBadge}</td>
-            <td class="px-4 py-4 font-semibold text-slate-800">${row.estimate}</td>
+          <tr class="bg-slate-900/10 hover:bg-slate-900/40 border-b border-slate-800/40">
+            <td class="px-4 py-4 font-bold text-white">${row.market}</td>
+            <td class="px-4 py-4 font-semibold text-emerald-400">${row.pick}${outcomeBadge}</td>
+            <td class="px-4 py-4 font-semibold text-slate-200">${row.estimate}</td>
             <td class="px-4 py-4">${confidenceBadge(row.confidence)}</td>
-            <td class="px-4 py-4 text-slate-500">${row.base}</td>
+            <td class="px-4 py-4 text-slate-400">${row.base}</td>
           </tr>
         `;
       }
@@ -1689,8 +1689,8 @@ function renderResults(projection) {
 
 function clearResults(clearHeader = true) {
   els.summaryGrid.innerHTML = "";
-  els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-semibold text-slate-500 shadow-panel">Compara un partido para ver los abridores y sus estadisticas.</div>`;
-  els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-500">Aún no hay comparación.</td></tr>`;
+  els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-800 bg-slate-900/40 p-5 text-center text-sm font-semibold text-slate-400 backdrop-blur-sm shadow-2xl">Compara un partido para ver los abridores y sus estadisticas.</div>`;
+  els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-400">Aún no hay comparación.</td></tr>`;
   els.sourceBadge.textContent = "Sin datos";
   if (clearHeader) renderMatchupHeader(getSelectedGame());
 }
@@ -1864,10 +1864,10 @@ function setBusy(isBusy, message) {
 
 function setStatus(message, tone = "neutral") {
   const classes = {
-    neutral: "border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700",
-    ok: "border-b border-slate-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800",
-    warn: "border-b border-slate-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900",
-    error: "border-b border-slate-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800",
+    neutral: "border-b border-slate-800 bg-slate-950/60 px-4 py-3 text-sm font-semibold text-slate-300",
+    ok: "border-b border-slate-800 bg-emerald-950/20 px-4 py-3 text-sm font-semibold text-emerald-400",
+    warn: "border-b border-slate-800 bg-amber-950/20 px-4 py-3 text-sm font-semibold text-amber-400",
+    error: "border-b border-slate-800 bg-rose-950/20 px-4 py-3 text-sm font-semibold text-rose-400",
   };
   els.statusBox.className = classes[tone] || classes.neutral;
   els.statusBox.textContent = message;

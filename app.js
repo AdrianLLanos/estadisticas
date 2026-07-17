@@ -99,8 +99,8 @@ const STADIUM_IMAGE_MAP = {
   "Rogers Centre":                 "images/rogers_centre.jpg",
   "Nationals Park":                "images/nationals_park.jpg",
   "Guaranteed Rate Field":         "images/guaranteed_rate_field.jpg",
-  "Sutter Health Park":            "images/sutter_health_park.png",
-  "George M. Steinbrenner Field":  "images/steinbrenner_field.png",
+  "Sutter Health Park":            "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Sutter_Health_Park_aerial_view_2023_%28Quintin_Soloviev%29.jpg/1280px-Sutter_Health_Park_aerial_view_2023_%28Quintin_Soloviev%29.jpg",
+  "George M. Steinbrenner Field":  "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/MacDill_Aircrew%2C_service_members_kick_off_opening_day_ceremony_for_TB_Rays_%28250328-F-YW699-1029%29.jpg/1280px-MacDill_Aircrew%2C_service_members_kick_off_opening_day_ceremony_for_TB_Rays_%28250328-F-YW699-1029%29.jpg",
 };
 
 // Resolves stadium image for a given venue name (fuzzy match)

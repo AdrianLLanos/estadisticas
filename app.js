@@ -135,6 +135,7 @@ const state = {
   teamStats: new Map(),
   pitcherStats: new Map(),
   recentContexts: new Map(),
+  weatherCache: new Map(),
   isCalibrating: false,
   activeProjection: null,
 };
@@ -171,7 +172,36 @@ document.addEventListener("DOMContentLoaded", () => {
   if (window.lucide) window.lucide.createIcons();
   updateCalibrationBadge();
   loadSlate();
+  scheduleMidnightReset();
 });
+
+function scheduleMidnightReset() {
+  const now = new Date();
+  const nextMidnight = new Date(now);
+  nextMidnight.setHours(24, 0, 0, 0); // Establece a las 12:00 AM del día siguiente
+  const msToMidnight = nextMidnight.getTime() - now.getTime();
+
+  setTimeout(() => {
+    console.log("Rollover a medianoche: Limpiando caches y cargando nueva jornada...");
+    
+    // Limpiar absolutamente todas las caches en memoria
+    state.weatherCache.clear();
+    state.teamStats.clear();
+    state.pitcherStats.clear();
+    state.recentContexts.clear();
+    
+    // Actualizar el selector de fecha al día de hoy
+    if (els.dateInput) {
+      els.dateInput.value = toDateInputValue(new Date());
+    }
+    
+    // Cargar automáticamente la nueva cartelera
+    loadSlate();
+    
+    // Agendar el reinicio para el siguiente día
+    scheduleMidnightReset();
+  }, msToMidnight);
+}
 
 function toggleTheme() {
   const isDark = document.documentElement.classList.toggle("dark");
@@ -193,6 +223,9 @@ function updateThemeUI() {
 async function loadSlate() {
   setBusy(true, "Cargando partidos de la jornada...");
   clearResults();
+  
+  // Limpia la caché de clima por completo al cambiar de fecha o recargar la jornada
+  state.weatherCache.clear();
 
   try {
     const date = els.dateInput.value || toDateInputValue(new Date());
@@ -2428,6 +2461,24 @@ function findStadiumInfo(venueName = "") {
 }
 
 async function fetchOpenMeteoWeather(venueName, gameDate) {
+  if (!venueName) return null;
+  
+  // Limpieza automática de registros antiguos para que no ocupen memoria
+  const NOW = Date.now();
+  const EXPIRATION_TIME = 2 * 60 * 60 * 1000; // 2 horas en milisegundos
+
+  for (const [key, value] of state.weatherCache.entries()) {
+    if (NOW - value.timestamp > EXPIRATION_TIME) {
+      state.weatherCache.delete(key);
+    }
+  }
+
+  // Comprobar si ya tenemos clima válido en caché
+  const cached = state.weatherCache.get(venueName);
+  if (cached && (NOW - cached.timestamp <= EXPIRATION_TIME)) {
+    return cached.data;
+  }
+
   const stadium = findStadiumInfo(venueName);
   if (!stadium?.latitude || !stadium?.longitude || !gameDate) return null;
 
@@ -2439,7 +2490,7 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
     const weather = pickOpenMeteoWeather(data, dateUtc);
     if (!weather) return null;
 
-    return {
+    const result = {
       temperature: weather.temperature,
       highTemperature: weather.highTemperature,
       lowTemperature: weather.lowTemperature,
@@ -2453,6 +2504,10 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
       latitude: stadium.latitude,
       longitude: stadium.longitude,
     };
+
+    // Guardar en caché autolimitada (max 30 estadios)
+    setLimitedMapValue(state.weatherCache, venueName, { timestamp: NOW, data: result }, 30);
+    return result;
   } catch (error) {
     console.warn("Open-Meteo error:", error);
     return null;

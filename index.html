@@ -22,6 +22,48 @@
               panel: "0 2px 12px rgba(15, 23, 42, 0.08)",
               'panel-dark': "0 4px 20px rgba(0, 0, 0, 0.25)",
             },
+            colors: {
+              white: "var(--color-white)",
+              slate: {
+                50: "var(--color-slate-50)",
+                100: "var(--color-slate-100)",
+                200: "var(--color-slate-200)",
+                300: "var(--color-slate-300)",
+                400: "var(--color-slate-400)",
+                500: "var(--color-slate-500)",
+                600: "var(--color-slate-600)",
+                700: "var(--color-slate-700)",
+                800: "var(--color-slate-800)",
+                900: "var(--color-slate-900)",
+                950: "var(--color-slate-950)",
+              },
+              emerald: {
+                50: "var(--color-emerald-50)",
+                100: "var(--color-emerald-100)",
+                200: "var(--color-emerald-200)",
+                300: "var(--color-emerald-300)",
+                400: "var(--color-emerald-400)",
+                500: "var(--color-emerald-500)",
+                600: "var(--color-emerald-600)",
+                700: "var(--color-emerald-700)",
+                800: "var(--color-emerald-800)",
+                900: "var(--color-emerald-900)",
+                950: "var(--color-emerald-950)",
+              },
+              sky: {
+                50: "var(--color-sky-50)",
+                100: "var(--color-sky-100)",
+                200: "var(--color-sky-200)",
+                300: "var(--color-sky-300)",
+                400: "var(--color-sky-400)",
+                500: "var(--color-sky-500)",
+                600: "var(--color-sky-600)",
+                700: "var(--color-sky-700)",
+                800: "var(--color-sky-800)",
+                900: "var(--color-sky-900)",
+                950: "var(--color-sky-950)",
+              }
+            }
           },
         },
       };
@@ -32,12 +74,91 @@
         --matchup-bg-mid1: rgba(255,255,255,0.92);
         --matchup-bg-mid2: rgba(255,255,255,0.70);
         --matchup-bg-end: rgba(255,255,255,0.15);
+
+        --color-white: #ffffff;
+        
+        --color-slate-50: #f8fafc;
+        --color-slate-100: #f1f5f9;
+        --color-slate-200: #e2e8f0;
+        --color-slate-300: #cbd5e1;
+        --color-slate-400: #94a3b8;
+        --color-slate-500: #64748b;
+        --color-slate-600: #475569;
+        --color-slate-700: #334155;
+        --color-slate-800: #1e293b;
+        --color-slate-900: #0f172a;
+        --color-slate-950: #020617;
+
+        --color-emerald-50: #ecfdf5;
+        --color-emerald-100: #d1fae5;
+        --color-emerald-200: #a7f3d0;
+        --color-emerald-300: #6ee7b7;
+        --color-emerald-400: #34d399;
+        --color-emerald-500: #10b981;
+        --color-emerald-600: #059669;
+        --color-emerald-700: #047857;
+        --color-emerald-800: #065f46;
+        --color-emerald-900: #064e3b;
+        --color-emerald-950: #022c22;
+
+        --color-sky-50: #f0f9ff;
+        --color-sky-100: #e0f2fe;
+        --color-sky-200: #bae6fd;
+        --color-sky-300: #7dd3fc;
+        --color-sky-400: #38bdf8;
+        --color-sky-500: #0ea5e9;
+        --color-sky-600: #0284c7;
+        --color-sky-700: #0369a1;
+        --color-sky-800: #075985;
+        --color-sky-900: #0c4a6e;
+        --color-sky-950: #082f49;
       }
       html.dark {
-        --matchup-bg-start: rgba(15, 23, 42, 0.98);
-        --matchup-bg-mid1: rgba(15, 23, 42, 0.94);
-        --matchup-bg-mid2: rgba(15, 23, 42, 0.70);
-        --matchup-bg-end: rgba(15, 23, 42, 0.15);
+        --matchup-bg-start: rgba(5, 37, 41, 0.98);
+        --matchup-bg-mid1: rgba(5, 37, 41, 0.94);
+        --matchup-bg-mid2: rgba(5, 37, 41, 0.70);
+        --matchup-bg-end: rgba(5, 37, 41, 0.15);
+
+        --color-white: #ebfdff; /* Noctis bright text */
+
+        /* Noctis theme slate mappings */
+        --color-slate-50: #CDD3DE;  /* Noctis input.foreground */
+        --color-slate-100: #b2cacd; /* Noctis editor.foreground */
+        --color-slate-200: #a5b5b5; /* Noctis sideBar.foreground / metadata */
+        --color-slate-300: #87a7ab; /* Noctis inactive foreground / subtexts */
+        --color-slate-400: #5b858b; /* Noctis comments */
+        --color-slate-500: #4e6b6e; /* Noctis line numbers */
+        --color-slate-600: #16a3b6; /* Noctis active text / functions */
+        --color-slate-700: #073940; /* Noctis input.border / widgets */
+        --color-slate-800: #083d44; /* Noctis active line highlight / borders */
+        --color-slate-900: #041d20; /* Noctis panels / sidebar */
+        --color-slate-950: #052529; /* Noctis editor.background */
+
+        /* Noctis theme emerald mappings */
+        --color-emerald-50: #062e32;
+        --color-emerald-100: #073940;
+        --color-emerald-200: #169fb13f;
+        --color-emerald-300: #60ebb1;
+        --color-emerald-400: #49e9a6;
+        --color-emerald-500: #49e9a6;
+        --color-emerald-600: #16b673;
+        --color-emerald-700: #16b673;
+        --color-emerald-800: #16b673;
+        --color-emerald-900: #041d20;
+        --color-emerald-950: #041d20;
+
+        /* Noctis theme sky mappings */
+        --color-sky-50: #062e32;
+        --color-sky-100: #073940;
+        --color-sky-200: #169fb13f;
+        --color-sky-300: #60dbeb;
+        --color-sky-400: #49d6e9;
+        --color-sky-500: #49d6e9;
+        --color-sky-600: #16a3b6;
+        --color-sky-700: #16a3b6;
+        --color-sky-800: #16a3b6;
+        --color-sky-900: #041d20;
+        --color-sky-950: #041d20;
       }
       .font-sports {
         font-family: 'Bebas Neue', 'Impact', sans-serif;
@@ -61,14 +182,14 @@
         height: 8px;
       }
       .dark ::-webkit-scrollbar-track {
-        background: rgba(15, 23, 42, 0.3);
+        background: rgba(5, 37, 41, 0.3);
       }
       .dark ::-webkit-scrollbar-thumb {
-        background: rgba(51, 65, 85, 0.6);
+        background: rgba(22, 159, 177, 0.4);
         border-radius: 4px;
       }
       .dark ::-webkit-scrollbar-thumb:hover {
-        background: rgba(71, 85, 105, 0.8);
+        background: rgba(22, 159, 177, 0.6);
       }
 
       /* Matchup card background layer */

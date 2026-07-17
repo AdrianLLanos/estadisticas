@@ -155,6 +155,7 @@ const els = {
   gamesList: document.querySelector("#gamesList"),
   gameCount: document.querySelector("#gameCount"),
   matchupHeader: document.querySelector("#matchupHeader"),
+  matchupMetadata: document.querySelector("#matchupMetadata"),
   statusBox: document.querySelector("#statusBox"),
   summaryGrid: document.querySelector("#summaryGrid"),
   pitcherGrid: document.querySelector("#pitcherGrid"),
@@ -1474,9 +1475,15 @@ function renderGames() {
 function renderMatchupHeader(game) {
   if (!game) {
     els.matchupHeader.innerHTML = `
-      <p class="text-sm font-semibold text-slate-400">Selecciona un partido</p>
-      <h2 class="mt-1 text-2xl font-bold text-white">Sin comparación</h2>
+      <div class="text-center py-4">
+        <h2 class="text-lg font-bold text-white">Sin comparación</h2>
+      </div>
     `;
+    if (els.matchupMetadata) {
+      els.matchupMetadata.innerHTML = `
+        <span class="text-slate-400 font-semibold">Selecciona un partido de la lista</span>
+      `;
+    }
     setStadiumBackground('');
     return;
   }
@@ -1512,39 +1519,9 @@ function renderMatchupHeader(game) {
 
   const time = game.gameDate ? formatTime(game.gameDate) : "";
 
-  els.matchupHeader.innerHTML = `
-    <div class="flex flex-col gap-4 md:flex-row md:items-center justify-between w-full relative z-10">
-      <!-- Matchup section -->
-      <div class="flex items-center gap-3 sm:gap-5">
-        <!-- Away Team -->
-        <div class="flex flex-col items-center text-center w-20 sm:w-24">
-          <img src="${awayLogo}" alt="${away}" class="h-10 w-10 sm:h-12 sm:w-12 object-contain img-smooth" onerror="this.style.display='none'" />
-          <span class="mt-1.5 text-[10px] sm:text-xs font-black uppercase text-slate-100 tracking-wider line-clamp-1">${escapeHtml(away)}</span>
-          <span class="mt-0.5 text-[9px] sm:text-xs text-slate-400 font-bold">${escapeHtml(awayRecord)}</span>
-        </div>
-        
-        <!-- @ Circle -->
-        <div class="flex h-8 w-8 items-center justify-center rounded-full border border-slate-800 bg-slate-900/50">
-          <span class="text-xs font-bold text-slate-400">@</span>
-        </div>
-        
-        <!-- Home Team -->
-        <div class="flex flex-col items-center text-center w-20 sm:w-24">
-          <img src="${homeLogo}" alt="${home}" class="h-10 w-10 sm:h-12 sm:w-12 object-contain img-smooth" onerror="this.style.display='none'" />
-          <span class="mt-1.5 text-[10px] sm:text-xs font-black uppercase text-slate-100 tracking-wider line-clamp-1">${escapeHtml(home)}</span>
-          <span class="mt-0.5 text-[9px] sm:text-xs text-slate-400 font-bold">${escapeHtml(homeRecord)}</span>
-        </div>
-      </div>
-      
-      <!-- Spacing for the static Compare Button on desktop -->
-      <div class="hidden xl:block w-44"></div>
-    </div>
-    
-    <!-- Divider Line -->
-    <div class="my-2.5 border-t border-slate-800 relative z-10"></div>
-    
-    <!-- Metadata Footer -->
-    <div class="flex flex-wrap items-center gap-4 text-[10px] sm:text-xs text-slate-300 relative z-10">
+  // Render metadata on the top row
+  if (els.matchupMetadata) {
+    els.matchupMetadata.innerHTML = `
       <div class="flex items-center gap-1.5">
         <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-400"></i>
         <span class="font-bold">${time}</span>
@@ -1556,6 +1533,30 @@ function renderMatchupHeader(game) {
           <span class="font-bold uppercase tracking-wider text-slate-100">${escapeHtml(venue)}</span>
           ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
         </div>
+      </div>
+    `;
+  }
+
+  // Render full matchups on the bottom row (below the button/metadata)
+  els.matchupHeader.innerHTML = `
+    <div class="flex items-center justify-center gap-6 sm:gap-12 w-full py-2 relative z-10">
+      <!-- Away Team -->
+      <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
+        <img src="${awayLogo}" alt="${away}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
+        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-100 tracking-wider">${escapeHtml(away)}</span>
+        <span class="mt-0.5 text-xs sm:text-sm text-slate-400 font-bold">${escapeHtml(awayRecord)}</span>
+      </div>
+      
+      <!-- @ Circle -->
+      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-800 bg-slate-900/50">
+        <span class="text-xs font-bold text-slate-400">@</span>
+      </div>
+      
+      <!-- Home Team -->
+      <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
+        <img src="${homeLogo}" alt="${home}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
+        <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-100 tracking-wider">${escapeHtml(home)}</span>
+        <span class="mt-0.5 text-xs sm:text-sm text-slate-400 font-bold">${escapeHtml(homeRecord)}</span>
       </div>
     </div>
   `;

@@ -37,6 +37,8 @@ const MLB_STADIUMS = {
   "Coors Field": { parkFactor: 1.12, stadiumType: "Hitter-friendly", elevation: 5280, latitude: 39.7559, longitude: -104.9942 },
   "Comerica Park": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 600, latitude: 42.3400, longitude: -83.0486 },
   "Minute Maid Park": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 50, latitude: 29.7572, longitude: -95.3556 },
+  "Daikin Park": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 50, latitude: 29.7572, longitude: -95.3556 },
+  "Dakin Park": { parkFactor: 1.02, stadiumType: "Hitter-friendly", elevation: 50, latitude: 29.7572, longitude: -95.3556 },
   "Kauffman Stadium": { parkFactor: 0.99, stadiumType: "Pitcher-friendly", elevation: 750, latitude: 39.0517, longitude: -94.4803 },
   "Dodger Stadium": { parkFactor: 0.98, stadiumType: "Pitcher-friendly", elevation: 515, latitude: 34.0739, longitude: -118.2400 },
   "Nationals Park": { parkFactor: 1.01, stadiumType: "Neutral", elevation: 26, latitude: 38.8730, longitude: -77.0075 },
@@ -76,6 +78,8 @@ const STADIUM_IMAGE_MAP = {
   "Coors Field":                   "images/coors_field.jpg",
   "Comerica Park":                 "images/comerica_park.jpg",
   "Minute Maid Park":              "images/minute_maid_park.jpg",
+  "Daikin Park":                   "images/minute_maid_park.jpg",
+  "Dakin Park":                    "images/minute_maid_park.jpg",
   "Kauffman Stadium":              "images/kauffman_stadium.jpg",
   "Dodger Stadium":                "images/dodger_stadium.jpg",
   "loanDepot park":                "images/loandepot_park.jpg",
@@ -95,6 +99,8 @@ const STADIUM_IMAGE_MAP = {
   "Rogers Centre":                 "images/rogers_centre.jpg",
   "Nationals Park":                "images/nationals_park.jpg",
   "Guaranteed Rate Field":         "images/guaranteed_rate_field.jpg",
+  "Sutter Health Park":            "images/sutter_health_park.png",
+  "George M. Steinbrenner Field":  "images/steinbrenner_field.png",
 };
 
 // Resolves stadium image for a given venue name (fuzzy match)

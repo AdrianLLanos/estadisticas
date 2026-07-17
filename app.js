@@ -1660,8 +1660,7 @@ function renderMatchupHeader(game) {
         <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-605 dark:text-slate-300 mt-0.5"></i>
         <div class="flex flex-col">
           <span class="font-bold uppercase tracking-wider text-slate-900 dark:text-white">${escapeHtml(venue)}</span>
-          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-750 dark:text-slate-200 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
-          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-700 dark:text-slate-300 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
+          ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-600 dark:text-slate-400 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
         </div>
       </div>
     `;

@@ -244,7 +244,11 @@ async function loadSlate() {
       throw new Error("MLB Stats API no respondió correctamente.");
     }
 
-    state.games = mlbResult.value?.dates?.[0]?.games || [];
+    const rawGames = mlbResult.value?.dates?.[0]?.games || [];
+    state.games = rawGames.filter(game => {
+      const detailedState = game.status?.detailedState;
+      return detailedState !== "Postponed" && detailedState !== "Cancelled" && detailedState !== "Rescheduled";
+    });
     state.espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
     state.selectedGamePk = state.games[0]?.gamePk || null;
 
@@ -556,7 +560,10 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   else if (finalHitsProb >= 0.53) finalHitsConfidence = "Media";
 
   // EVALUAR RESULTADO REAL PARA PARTIDOS FINALIZADOS (FEEDBACK LOOP)
-  const isFinal = game.status?.abstractGameState === "Final";
+  const isFinal = game.status?.abstractGameState === "Final" &&
+                  game.status?.detailedState !== "Postponed" &&
+                  game.status?.detailedState !== "Cancelled" &&
+                  game.status?.detailedState !== "Rescheduled";
   let winnerOutcome = null;
   let totalRunsOutcome = null;
   let handicapOutcome = null;
@@ -1011,7 +1018,10 @@ async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
     const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
     const finalGames = (schedule.dates || [])
       .flatMap((date) => date.games || [])
-      .filter((game) => game.status?.abstractGameState === "Final");
+      .filter((game) => game.status?.abstractGameState === "Final" &&
+                        game.status?.detailedState !== "Postponed" &&
+                        game.status?.detailedState !== "Cancelled" &&
+                        game.status?.detailedState !== "Rescheduled");
     const games = finalGames.slice(-10);
     const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
     const parsedGames = [];
@@ -3221,7 +3231,10 @@ async function runBackgroundCalibration(dates) {
           const games = mlbResult.value?.dates?.[0]?.games || [];
           const espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
           
-          const finishedGames = games.filter(g => g.status?.abstractGameState === "Final");
+          const finishedGames = games.filter(g => g.status?.abstractGameState === "Final" &&
+                                                  g.status?.detailedState !== "Postponed" &&
+                                                  g.status?.detailedState !== "Cancelled" &&
+                                                  g.status?.detailedState !== "Rescheduled");
           
           finishedGames.forEach(game => {
             const away = normalizeName(game.teams.away.team.name);

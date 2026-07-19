@@ -2961,18 +2961,60 @@ function getSelectedGame() {
   return state.games.find((game) => game.gamePk === state.selectedGamePk) || null;
 }
 
-function findEspnEvent(game) {
-  const away = normalizeName(game.teams.away.team.name);
-  const home = normalizeName(game.teams.home.team.name);
+function isEspnTeamMatch(mlbTeam, espnTeam) {
+  if (!mlbTeam || !espnTeam) return false;
+  const mlbNorm = normalizeName(mlbTeam.name || "");
+  const mlbTeamNameNorm = normalizeName(mlbTeam.teamName || "");
+  const espnDispNorm = normalizeName(espnTeam.displayName || "");
+  const espnNameNorm = normalizeName(espnTeam.name || "");
 
-  return state.espnEvents.find((event) => {
+  if (mlbNorm && espnDispNorm && (mlbNorm === espnDispNorm || mlbNorm.includes(espnDispNorm) || espnDispNorm.includes(mlbNorm))) {
+    return true;
+  }
+  if (mlbTeamNameNorm && espnNameNorm && mlbTeamNameNorm === espnNameNorm) {
+    return true;
+  }
+  if (mlbTeam.abbreviation && espnTeam.abbreviation && mlbTeam.abbreviation === espnTeam.abbreviation) {
+    return true;
+  }
+  return false;
+}
+
+function findEspnEvent(game, espnEventsList = state.espnEvents) {
+  if (!game || !game.teams || !espnEventsList || !espnEventsList.length) return null;
+  const awayMlb = game.teams.away?.team;
+  const homeMlb = game.teams.home?.team;
+
+  const matchingEvents = espnEventsList.filter((event) => {
     const competition = event.competitions?.[0];
     const competitors = competition?.competitors || [];
-    const eventAway = normalizeName(competitors.find((item) => item.homeAway === "away")?.team?.displayName || "");
-    const eventHome = normalizeName(competitors.find((item) => item.homeAway === "home")?.team?.displayName || "");
-    return eventAway === away && eventHome === home;
+    const awayEspn = competitors.find((item) => item.homeAway === "away")?.team;
+    const homeEspn = competitors.find((item) => item.homeAway === "home")?.team;
+
+    return isEspnTeamMatch(awayMlb, awayEspn) && isEspnTeamMatch(homeMlb, homeEspn);
   });
+
+  if (!matchingEvents.length) return null;
+  if (matchingEvents.length === 1) return matchingEvents[0];
+
+  // Si hay varios partidos entre los mismos equipos en la fecha (Doubleheader), seleccionar por proximidad de horario
+  const gameTime = game.gameDate ? new Date(game.gameDate).getTime() : 0;
+  if (!gameTime) return matchingEvents[0];
+
+  let bestEvent = matchingEvents[0];
+  let minDiff = Infinity;
+  for (const event of matchingEvents) {
+    const eventDateStr = event.competitions?.[0]?.date || event.date;
+    const eventTime = eventDateStr ? new Date(eventDateStr).getTime() : 0;
+    const diff = Math.abs(eventTime - gameTime);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestEvent = event;
+    }
+  }
+  return bestEvent;
 }
+
 
 function extractEspnOdds(event) {
   const odds = event?.competitions?.[0]?.odds?.[0] || {};
@@ -3906,15 +3948,7 @@ async function runBackgroundCalibration(dates) {
                                                   g.status?.detailedState !== "Rescheduled");
           
           finishedGames.forEach(game => {
-            const away = normalizeName(game.teams.away.team.name);
-            const home = normalizeName(game.teams.home.team.name);
-            const espnEvent = espnEvents.find((event) => {
-              const competition = event.competitions?.[0];
-              const competitors = competition?.competitors || [];
-              const eventAway = normalizeName(competitors.find((item) => item.homeAway === "away")?.team?.displayName || "");
-              const eventHome = normalizeName(competitors.find((item) => item.homeAway === "home")?.team?.displayName || "");
-              return eventAway === away && eventHome === home;
-            });
+            const espnEvent = findEspnEvent(game, espnEvents);
             if (espnEvent) {
               espnEventsMap.set(game.gamePk, espnEvent);
             }

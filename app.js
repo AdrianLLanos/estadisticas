@@ -321,7 +321,21 @@ async function compareSelectedGame() {
     const espnWeather = extractEspnWeather(espnEvent);
     const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
     const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-    const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, openMeteoWeather, awayBullpenRoster, homeBullpenRoster] = await Promise.all([
+    
+    const [
+      awayStats, 
+      homeStats, 
+      awayMlbPitcher, 
+      homeMlbPitcher, 
+      awayRecent, 
+      homeRecent, 
+      openMeteoWeather, 
+      awayBullpenRoster, 
+      homeBullpenRoster,
+      lineupFeeds,
+      awayRosterMap,
+      homeRosterMap
+    ] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
@@ -331,15 +345,64 @@ async function compareSelectedGame() {
       fetchOpenMeteoWeather(game.venue?.name, game.gameDate),
       fetchBullpenRoster(away.id, season, game.teams.away.probablePitcher?.id),
       fetchBullpenRoster(home.id, season, game.teams.home.probablePitcher?.id),
+      fetchLineupData(game.gamePk, espnEvent?.id),
+      fetchRosterHittingStats(away.id, season),
+      fetchRosterHittingStats(home.id, season),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
     const homePitcher = mergePitcherSources(espnPitchers.home, homeMlbPitcher, game.teams.home.probablePitcher);
     const weather = openMeteoWeather || espnWeather;
+
+    const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
+    const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
+
+    // Extract lineups
+    const mlbAwayLineupIds = lineupFeeds.mlbBoxscore ? extractMlbLineup(lineupFeeds.mlbBoxscore.teams?.away) : null;
+    const mlbHomeLineupIds = lineupFeeds.mlbBoxscore ? extractMlbLineup(lineupFeeds.mlbBoxscore.teams?.home) : null;
+    
+    let awayLineupPlayers = null;
+    let homeLineupPlayers = null;
+    let lineupSource = "Ninguno";
+    
+    if (mlbAwayLineupIds && mlbHomeLineupIds) {
+      awayLineupPlayers = getMlbLineupPlayers(mlbAwayLineupIds, lineupFeeds.mlbBoxscore.teams?.away);
+      homeLineupPlayers = getMlbLineupPlayers(mlbHomeLineupIds, lineupFeeds.mlbBoxscore.teams?.home);
+      lineupSource = "MLB";
+    } else if (lineupFeeds.espnSummary) {
+      const espnAwayLineup = extractEspnLineup(lineupFeeds.espnSummary, "away");
+      const espnHomeLineup = extractEspnLineup(lineupFeeds.espnSummary, "home");
+      if (espnAwayLineup && espnHomeLineup) {
+        awayLineupPlayers = espnAwayLineup;
+        homeLineupPlayers = espnHomeLineup;
+        lineupSource = "ESPN";
+      }
+    }
+
+    // Resolve detailed lineup stats (including split & recent AVG)
+    const [awayLineupResolved, homeLineupResolved] = await Promise.all([
+      resolveLineupStats(awayLineupPlayers, awayRosterMap, awayStats, season, homePitcherMetrics),
+      resolveLineupStats(homeLineupPlayers, homeRosterMap, homeStats, season, awayPitcherMetrics),
+    ]);
+
+    // Compute lineup offense stats and adjust team stats
+    let adjustedAwayStats = { ...awayStats };
+    let adjustedHomeStats = { ...homeStats };
+    
+    const awayLineupOffense = computeLineupStats(awayLineupResolved, homePitcherMetrics.hand, awayStats);
+    const homeLineupOffense = computeLineupStats(homeLineupResolved, awayPitcherMetrics.hand, homeStats);
+    
+    if (awayLineupOffense) {
+      adjustedAwayStats = { ...adjustedAwayStats, ...awayLineupOffense };
+    }
+    if (homeLineupOffense) {
+      adjustedHomeStats = { ...adjustedHomeStats, ...homeLineupOffense };
+    }
+
     const projection = buildProjection({
       game,
-      awayStats,
-      homeStats,
+      awayStats: adjustedAwayStats,
+      homeStats: adjustedHomeStats,
       awayPitcher,
       homePitcher,
       awayRecent,
@@ -350,12 +413,16 @@ async function compareSelectedGame() {
 
     projection.awayBullpenRoster = awayBullpenRoster;
     projection.homeBullpenRoster = homeBullpenRoster;
+    projection.awayLineup = awayLineupResolved;
+    projection.homeLineup = homeLineupResolved;
+    projection.lineupSource = lineupSource;
 
     state.activeProjection = projection;
 
     renderSummary(projection);
     renderPitchers(projection);
     renderBullpens(projection);
+    renderLineups(projection);
     renderResults(projection);
     renderPredictor(projection);
     const calInfo = obtenerCalibracion();
@@ -1173,6 +1240,284 @@ async function fetchBullpenRoster(teamId, season, probablePitcherId) {
   } catch {
     return [];
   }
+}
+
+async function fetchRosterHittingStats(teamId, season) {
+  try {
+    const url = `${MLB_BASE}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=[season,statSplits,gameLog],group=[hitting],sitCodes=[vl,vr],season=${season}))`;
+    const data = await fetchJson(url);
+    const players = data.roster || [];
+    const rosterMap = new Map();
+    
+    players.forEach(item => {
+      const person = item.person || {};
+      const position = item.position || {};
+      const parsed = parseHitterStats(person, position);
+      if (parsed) {
+        rosterMap.set(String(parsed.id), parsed);
+        rosterMap.set(normalizeName(parsed.name), parsed);
+      }
+    });
+    return rosterMap;
+  } catch (err) {
+    console.error(`Error fetching roster hitting stats for team ${teamId}:`, err);
+    return new Map();
+  }
+}
+
+function parseHitterStats(person, positionObj = {}) {
+  if (!person || !person.id) return null;
+  const statsArray = person.stats || [];
+  const seasonStats = statsArray.find(s => s.type?.displayName === "season")?.splits?.[0]?.stat || {};
+  const splitStats = statsArray.find(s => s.type?.displayName === "statSplits")?.splits || [];
+  const gameLogSplits = statsArray.find(s => s.type?.displayName === "gameLog")?.splits || [];
+
+  const vlObp = splitStats.find(s => s.situation?.code === "vl")?.stat?.obp;
+  const vrObp = splitStats.find(s => s.situation?.code === "vr")?.stat?.obp;
+
+  const sortedLogs = [...gameLogSplits]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, 14);
+
+  let recentAvg = null;
+  if (sortedLogs.length > 0) {
+    const hits = sum(sortedLogs.map(l => l.stat?.hits));
+    const atBats = sum(sortedLogs.map(l => l.stat?.atBats));
+    recentAvg = atBats > 0 ? hits / atBats : null;
+  }
+
+  const seasonAvg = numberOr(seasonStats.avg, 0);
+  const seasonObp = numberOr(seasonStats.obp, 0);
+  const seasonSlg = numberOr(seasonStats.slg, 0);
+  const homeRuns = number(seasonStats.homeRuns);
+  const games = number(seasonStats.gamesPlayed) || 1;
+
+  return {
+    id: person.id,
+    name: person.fullName || person.lastName || "N/D",
+    position: positionObj.abbreviation || "",
+    avg: seasonAvg,
+    obp: seasonObp,
+    slg: seasonSlg,
+    vlObp: numberOr(vlObp, seasonObp),
+    vrObp: numberOr(vrObp, seasonObp),
+    recentAvg: recentAvg,
+    homeRuns: homeRuns,
+    games: games,
+  };
+}
+
+async function fetchHitterStatsFallback(playerId, season) {
+  try {
+    const statsUrl = `${MLB_BASE}/people/${playerId}/stats?stats=season,statSplits,gameLog&group=hitting&season=${season}&sitCodes=vl,vr`;
+    const data = await fetchJson(statsUrl);
+    const statsArray = data.stats || [];
+    
+    const personUrl = `${MLB_BASE}/people/${playerId}`;
+    const personData = await fetchJson(personUrl);
+    const person = personData.people?.[0] || { id: playerId, fullName: "N/D" };
+    person.stats = statsArray;
+
+    return parseHitterStats(person, { abbreviation: person.primaryPosition?.abbreviation });
+  } catch (err) {
+    console.error(`Error fetching fallback stats for player ${playerId}:`, err);
+    return null;
+  }
+}
+
+function getHitterFallbackStats(teamStats) {
+  return {
+    avg: teamStats.battingAverage || LEAGUE.battingAverage,
+    obp: teamStats.obp || LEAGUE.obp,
+    slg: teamStats.slg || LEAGUE.slg,
+    vlObp: teamStats.obp || LEAGUE.obp,
+    vrObp: teamStats.obp || LEAGUE.obp,
+    recentAvg: teamStats.battingAverage || LEAGUE.battingAverage,
+    homeRuns: 10,
+    games: 80,
+  };
+}
+
+async function fetchLineupData(gamePk, espnEventId) {
+  let mlbBoxscore = null;
+  let espnSummary = null;
+  
+  try {
+    mlbBoxscore = await fetchJson(`${MLB_BASE}/game/${gamePk}/boxscore`);
+  } catch (err) {
+    console.warn("No se pudo obtener el boxscore de MLB:", err);
+  }
+  
+  const mlbAwayLineup = mlbBoxscore ? extractMlbLineup(mlbBoxscore.teams?.away) : null;
+  const mlbHomeLineup = mlbBoxscore ? extractMlbLineup(mlbBoxscore.teams?.home) : null;
+  
+  if ((!mlbAwayLineup || !mlbHomeLineup) && espnEventId) {
+    try {
+      espnSummary = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/summary?event=${espnEventId}`);
+    } catch (err) {
+      console.warn("No se pudo obtener el summary de ESPN:", err);
+    }
+  }
+  
+  return { mlbBoxscore, espnSummary };
+}
+
+function extractMlbLineup(teamBoxscore) {
+  if (!teamBoxscore) return null;
+  if (Array.isArray(teamBoxscore.battingOrder) && teamBoxscore.battingOrder.length >= 9) {
+    return teamBoxscore.battingOrder.slice(0, 9);
+  }
+  
+  const players = teamBoxscore.players || {};
+  const starters = [];
+  for (const [key, player] of Object.entries(players)) {
+    const bo = player.battingOrder;
+    if (bo && bo.length === 3 && bo.endsWith("00")) {
+      const idx = parseInt(bo[0], 10) - 1;
+      if (idx >= 0 && idx < 9) {
+        starters[idx] = player.person?.id;
+      }
+    }
+  }
+  
+  const filteredStarters = starters.filter(id => id != null);
+  if (filteredStarters.length >= 9) {
+    return filteredStarters;
+  }
+  
+  if (Array.isArray(teamBoxscore.batters) && teamBoxscore.batters.length >= 9) {
+    return teamBoxscore.batters.slice(0, 9);
+  }
+  
+  return null;
+}
+
+function extractEspnLineup(espnSummary, side) {
+  if (!espnSummary) return null;
+  const rosters = espnSummary.rosters || [];
+  const teamRoster = rosters.find(r => r.team?.homeAway === side) || {};
+  const players = teamRoster.roster || [];
+  
+  const starters = players
+    .filter(p => p.starter && p.battingOrder >= 1 && p.battingOrder <= 9)
+    .sort((a, b) => a.battingOrder - b.battingOrder);
+    
+  if (starters.length >= 9) {
+    return starters.slice(0, 9).map(p => ({
+      name: p.athlete?.displayName || "N/D",
+      position: p.position?.abbreviation || p.athlete?.position?.abbreviation || "",
+      espnId: p.athlete?.id,
+    }));
+  }
+  return null;
+}
+
+function getMlbLineupPlayers(mlbLineupIds, teamBoxscore) {
+  const players = teamBoxscore.players || {};
+  return mlbLineupIds.map(id => {
+    const player = players[`ID${id}`] || {};
+    return {
+      id: id,
+      name: player.person?.fullName || "N/D",
+      position: player.position?.abbreviation || "",
+    };
+  });
+}
+
+async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, opposingPitcher) {
+  if (!lineupPlayers) return null;
+  
+  const resolved = await Promise.all(lineupPlayers.map(async (player, index) => {
+    let stats = player.id ? rosterMap.get(String(player.id)) : null;
+    
+    if (!stats) {
+      stats = rosterMap.get(normalizeName(player.name));
+    }
+    
+    if (!stats && player.id) {
+      stats = await fetchHitterStatsFallback(player.id, season);
+      if (stats) {
+        rosterMap.set(String(player.id), stats);
+        rosterMap.set(normalizeName(stats.name), stats);
+      }
+    }
+    
+    if (!stats) {
+      const fallbackVal = getHitterFallbackStats(teamStats);
+      stats = {
+        id: player.id || player.espnId || `fb-${index}`,
+        name: player.name || "Jugador N/D",
+        position: player.position || "",
+        ...fallbackVal
+      };
+    } else {
+      if (player.position) stats.position = player.position;
+    }
+    
+    const pitcherWhip = numberOr(opposingPitcher?.whip, LEAGUE.whip);
+    const pitcherFactor = pitcherWhip / LEAGUE.whip;
+    const adjustedFactor = 1.0 + (pitcherFactor - 1.0) * 0.75;
+    
+    const opponentHand = String(opposingPitcher?.hand || opposingPitcher?.throws || "R").toUpperCase().startsWith("L") ? "L" : "R";
+    const splitObp = opponentHand === "L" ? stats.vlObp : stats.vrObp;
+    
+    let pBase = splitObp * adjustedFactor;
+    pBase = clamp(pBase, 0.15, 0.50);
+    
+    const hitterHrPerGame = stats.homeRuns / (stats.games || 1);
+    const pitcherHr9 = numberOr(opposingPitcher?.hr9, LEAGUE.pitcherHr9);
+    const pitcherHrFactor = pitcherHr9 / LEAGUE.pitcherHr9;
+    const adjustedHrFactor = 1.0 + (pitcherHrFactor - 1.0) * 0.5;
+    const expectedHr = hitterHrPerGame * adjustedHrFactor;
+    let hrProb = 1.0 - Math.exp(-expectedHr);
+    hrProb = clamp(hrProb, 0.01, 0.45);
+    
+    return {
+      ...stats,
+      pBase,
+      hrProb,
+      splitLabel: `${splitObp.toFixed(3)} vs${opponentHand}`,
+    };
+  }));
+  
+  return resolved;
+}
+
+function computeLineupStats(playersResolved, opponentHand, teamStats) {
+  if (!playersResolved || playersResolved.length < 9) return null;
+  
+  const avgs = playersResolved.map(p => p.avg);
+  const obps = playersResolved.map(p => p.obp);
+  const slgs = playersResolved.map(p => p.slg);
+  
+  const avg = average(avgs);
+  const obp = average(obps);
+  const slg = average(slgs);
+  const ops = obp + slg;
+  
+  const totalHr = sum(playersResolved.map(p => p.homeRuns));
+  const totalGames = sum(playersResolved.map(p => p.games));
+  const lineupHrRate = totalGames > 0 ? (totalHr / totalGames) * 9 : LEAGUE.homeRunsPerGame;
+  
+  const teamOps = teamStats.ops || LEAGUE.ops;
+  const teamAvg = teamStats.battingAverage || LEAGUE.battingAverage;
+  const teamHr = teamStats.homeRunsPerGame || LEAGUE.homeRunsPerGame;
+  
+  const runsPerGame = (teamStats.runsPerGame || LEAGUE.runsPerGame) * (ops / teamOps);
+  const hitsPerGame = (teamStats.hitsPerGame || LEAGUE.hitsPerGame) * (avg / teamAvg);
+  const homeRunsPerGame = teamHr * (lineupHrRate / teamHr);
+  
+  return {
+    battingAverage: avg,
+    obp: obp,
+    slg: slg,
+    ops: ops,
+    opsVsLeft: average(playersResolved.map(p => p.vlObp + p.slg)),
+    opsVsRight: average(playersResolved.map(p => p.vrObp + p.slg)),
+    runsPerGame,
+    hitsPerGame,
+    homeRunsPerGame,
+  };
 }
 
 function parseRecentTeamGame(game, boxscore, teamId) {
@@ -2200,6 +2545,136 @@ function renderBullpens(projection) {
   }
 }
 
+function renderLineups(projection) {
+  const container = document.getElementById("lineupSection");
+  if (!container) return;
+
+  const awayLineup = projection.awayLineup;
+  const homeLineup = projection.homeLineup;
+
+  if (!awayLineup || !homeLineup || awayLineup.length === 0 || homeLineup.length === 0) {
+    container.innerHTML = `
+      <section class="overflow-hidden rounded-lg border border-dashed border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 text-center text-sm font-semibold text-slate-800 dark:text-slate-200 shadow-panel dark:shadow-panel-dark mb-5">
+        <div class="flex flex-col items-center justify-center py-4">
+          <i data-lucide="users" class="h-8 w-8 text-slate-400 mb-2"></i>
+          <p>Alineaciones confirmadas no disponibles todavía para este partido (MLB/ESPN).</p>
+          <span class="text-xs text-slate-500 mt-1">Se utilizarán las estadísticas promedio de los equipos para los cálculos.</span>
+        </div>
+      </section>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+    return;
+  }
+
+  const awayTeam = projection.game.teams.away.team;
+  const homeTeam = projection.game.teams.home.team;
+  
+  const awayLogo = mlbTeamLogoUrl(awayTeam.id);
+  const homeLogo = mlbTeamLogoUrl(homeTeam.id);
+
+  const awayOpponentHand = projection.model.homePitcherMetrics.hand === "L" ? "ZURDO" : "DERECHO";
+  const homeOpponentHand = projection.model.awayPitcherMetrics.hand === "L" ? "ZURDO" : "DERECHO";
+
+  const awayColor = getTeamColor(projection.awayColor, false, projection.awayAlternateColor, awayTeam.name, projection.awayAbbreviation);
+  const homeColor = getTeamColor(projection.homeColor, true, projection.homeAlternateColor, homeTeam.name, projection.homeAbbreviation);
+
+  const buildTeamLineupTable = (teamName, teamLogo, opponentHandText, lineupResolved, teamColor) => {
+    const rowsHtml = lineupResolved.map((hitter, index) => {
+      const bo = index + 1;
+      
+      const avgStr = hitter.avg != null && hitter.avg > 0 ? hitter.avg.toFixed(3) : "-";
+      const obpStr = hitter.obp != null && hitter.obp > 0 ? hitter.obp.toFixed(3) : "-";
+      const splitStr = hitter.splitLabel || "-";
+      
+      let streakStr = "-";
+      let streakClass = "";
+      if (hitter.recentAvg != null) {
+        streakStr = hitter.recentAvg.toFixed(3);
+        const diff = hitter.recentAvg - hitter.avg;
+        if (diff >= 0.040 && hitter.recentAvg >= 0.250) {
+          streakStr += " 🔥";
+          streakClass = "text-emerald-500 font-bold";
+        } else if (diff <= -0.040) {
+          streakStr += " ❄️";
+          streakClass = "text-rose-500 font-bold";
+        }
+      }
+
+      const pBaseStr = hitter.pBase != null ? `${Math.round(hitter.pBase * 100)}%` : "-";
+      const pBaseWeight = hitter.pBase >= 0.35 ? "text-emerald-500 font-black" : (hitter.pBase < 0.26 ? "text-rose-500 font-semibold" : "font-bold text-slate-900 dark:text-white");
+
+      const hrStr = hitter.hrProb != null && hitter.hrProb >= 0.005 ? `${(hitter.hrProb * 100).toFixed(1)}%` : "-";
+      const hrWeight = hitter.hrProb >= 0.15 ? "text-amber-500 font-black" : "font-bold text-slate-700 dark:text-slate-200";
+
+      return `
+        <tr class="odd:bg-white dark:odd:bg-slate-900/10 even:bg-slate-50/50 dark:even:bg-slate-900/30 hover:bg-blue-50/50 dark:hover:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800/80 transition-colors">
+          <td class="px-3 py-2 text-center text-slate-500 dark:text-slate-400 font-bold font-mono text-xs">${bo}</td>
+          <td class="px-3 py-2 text-left font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+            <span class="hover:underline cursor-default">${escapeHtml(hitter.name)}</span>
+            ${hitter.position ? `<span class="text-[10px] font-bold text-slate-400 dark:text-slate-500 ml-1.5 uppercase font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">${escapeHtml(hitter.position)}</span>` : ""}
+          </td>
+          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${avgStr}</td>
+          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${obpStr}</td>
+          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${splitStr}</td>
+          <td class="px-3 py-2 text-center font-mono font-medium ${streakClass}">${streakStr}</td>
+          <td class="px-3 py-2 text-center font-mono text-sm ${pBaseWeight}">${pBaseStr}</td>
+          <td class="px-3 py-2 text-center font-mono text-sm ${hrWeight}">${hrStr}</td>
+        </tr>
+      `;
+    }).join("");
+
+    return `
+      <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark mb-5">
+        <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-4 py-3 bg-slate-50/50 dark:bg-slate-900/40">
+          <div class="flex items-center gap-2.5">
+            <img src="${teamLogo}" alt="${teamName}" class="h-5 w-5 object-contain img-smooth" onerror="this.style.display='none'" />
+            <h3 class="text-sm font-black uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-1.5" style="border-left: 3px solid ${teamColor}; padding-left: 8px;">
+              ${escapeHtml(teamName)} <span class="text-slate-500 dark:text-slate-450 font-medium">— ORDEN DE BATEO</span>
+            </h3>
+          </div>
+          <span class="text-[10px] sm:text-xs font-black uppercase text-slate-700 dark:text-slate-300 font-sans">
+            Split vs <span class="font-black text-emerald-600 dark:text-emerald-450">${opponentHandText}</span>
+          </span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[700px] text-left text-xs">
+            <thead class="bg-slate-50/80 dark:bg-slate-950/20 text-[10px] font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-850">
+              <tr>
+                <th class="px-3 py-2 text-center w-8">#</th>
+                <th class="px-3 py-2 text-left">Bateador</th>
+                <th class="px-3 py-2 text-center w-16">AVG</th>
+                <th class="px-3 py-2 text-center w-16">OBP</th>
+                <th class="px-3 py-2 text-center w-24">Split</th>
+                <th class="px-3 py-2 text-center w-24">Racha 14J</th>
+                <th class="px-3 py-2 text-center w-20">P(Base)</th>
+                <th class="px-3 py-2 text-center w-20">HR%</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  container.innerHTML = `
+    <div class="mb-4">
+      <h2 class="text-base font-black uppercase tracking-wide text-slate-900 dark:text-white">Análisis de Bateadores vs Pitcher Abridor</h2>
+      <p class="text-xs text-slate-600 dark:text-slate-400 font-semibold leading-relaxed mt-0.5">
+        OBP de temporada, splits vs zurdo/derecho, racha reciente (14J) y probabilidad de jonrón estimada vs pitcher abridor.
+        <span class="text-emerald-600 dark:text-emerald-450 font-bold">(Lineups confirmados vía ${projection.lineupSource})</span>
+      </p>
+      <div class="mt-2.5 border-t border-dotted border-slate-200 dark:border-slate-800"></div>
+    </div>
+    <div class="flex flex-col">
+      ${buildTeamLineupTable(awayTeam.name, awayLogo, awayOpponentHand, awayLineup, awayColor)}
+      ${buildTeamLineupTable(homeTeam.name, homeLogo, homeOpponentHand, homeLineup, homeColor)}
+    </div>
+  `;
+}
+
 function teamPitcherSide(align, pitcher, team) {
   const isRight = align === "right";
   const flexDirection = isRight ? "flex-row-reverse text-right" : "";
@@ -2304,6 +2779,12 @@ function clearResults(clearHeader = true) {
   els.sourceBadge.textContent = "Sin datos";
   const existingBullpen = document.getElementById("bullpenSection");
   if (existingBullpen) existingBullpen.remove();
+  
+  const lineupSection = document.getElementById("lineupSection");
+  if (lineupSection) {
+    lineupSection.innerHTML = "";
+  }
+
   if (els.predictorCardContent) {
     els.predictorCardContent.innerHTML = `
       <div class="flex-1 flex flex-col items-center justify-center py-6 text-center text-sm font-semibold text-slate-700 dark:text-slate-200">

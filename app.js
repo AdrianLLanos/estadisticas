@@ -134,6 +134,8 @@ function setStadiumBackground(venueName) {
   }
 }
 
+const LINEUP_POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutos (media hora)
+
 const state = {
   games: [],
   espnEvents: [],
@@ -144,6 +146,9 @@ const state = {
   weatherCache: new Map(),
   isCalibrating: false,
   activeProjection: null,
+  lineupStatusMap: new Map(),
+  lineupPollTimer: null,
+  isPollingLineups: false,
 };
 
 const els = {
@@ -161,6 +166,7 @@ const els = {
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
   calibrationBadge: document.querySelector("#calibrationBadge"),
+  lineupAutoBadge: document.querySelector("#lineupAutoBadge"),
   themeToggleBtn: document.querySelector("#themeToggleBtn"),
   themeToggleIcon: document.querySelector("#themeToggleIcon"),
   readingModeBtn: document.querySelector("#readingModeBtn"),
@@ -252,6 +258,141 @@ function updateReadingModeUI() {
   }
 }
 
+function stopLineupPolling() {
+  if (state.lineupPollTimer) {
+    clearInterval(state.lineupPollTimer);
+    state.lineupPollTimer = null;
+  }
+}
+
+function startLineupPolling() {
+  stopLineupPolling();
+  state.lineupStatusMap.clear();
+  checkAllLineups();
+  state.lineupPollTimer = setInterval(checkAllLineups, LINEUP_POLL_INTERVAL_MS);
+}
+
+async function checkAllLineups() {
+  if (state.isPollingLineups || !state.games.length) return;
+  state.isPollingLineups = true;
+  updateLineupAutoBadge("loading");
+
+  try {
+    let newlyConfirmedGame = null;
+
+    await Promise.allSettled(
+      state.games.map(async (game) => {
+        const previousStatus = state.lineupStatusMap.get(game.gamePk);
+        
+        // Si el partido ya tiene alineación confirmada, omitir nueva petición a las APIs
+        if (previousStatus?.hasLineup) {
+          return previousStatus;
+        }
+
+        const espnEvent = findEspnEvent(game);
+        const feeds = await fetchLineupData(game.gamePk, espnEvent?.id);
+        
+        const mlbAwayLineup = feeds.mlbBoxscore ? extractMlbLineup(feeds.mlbBoxscore.teams?.away) : null;
+        const mlbHomeLineup = feeds.mlbBoxscore ? extractMlbLineup(feeds.mlbBoxscore.teams?.home) : null;
+        
+        let hasLineup = false;
+        let source = "Ninguno";
+
+        if (mlbAwayLineup && mlbHomeLineup) {
+          hasLineup = true;
+          source = "MLB";
+        } else if (feeds.espnSummary) {
+          const espnAway = extractEspnLineup(feeds.espnSummary, "away");
+          const espnHome = extractEspnLineup(feeds.espnSummary, "home");
+          if (espnAway && espnHome) {
+            hasLineup = true;
+            source = "ESPN";
+          }
+        }
+
+        const wasConfirmed = previousStatus?.hasLineup || false;
+
+        const currentStatus = {
+          gamePk: game.gamePk,
+          hasLineup,
+          source,
+          lastChecked: Date.now(),
+        };
+        state.lineupStatusMap.set(game.gamePk, currentStatus);
+
+        if (!wasConfirmed && hasLineup && game.gamePk === state.selectedGamePk) {
+          newlyConfirmedGame = { game, source };
+        }
+
+        return currentStatus;
+      })
+    );
+
+    const confirmedCount = [...state.lineupStatusMap.values()].filter((s) => s.hasLineup).length;
+    const allConfirmed = state.games.length > 0 && confirmedCount === state.games.length;
+
+    if (allConfirmed) {
+      stopLineupPolling();
+    }
+
+    updateLineupAutoBadge("ok", allConfirmed);
+    renderGames();
+
+    if (newlyConfirmedGame) {
+      if (state.activeProjection && state.activeProjection.lineupSource === "Ninguno") {
+        setStatus(`¡Alineación confirmada detectada (${newlyConfirmedGame.source}) para ${newlyConfirmedGame.game.teams.away.team.name} vs ${newlyConfirmedGame.game.teams.home.team.name}! Actualizando proyecciones...`, "ok");
+        compareSelectedGame();
+      }
+    }
+  } catch (err) {
+    console.warn("Error en verificación automática de alineaciones:", err);
+    updateLineupAutoBadge("error");
+  } finally {
+    state.isPollingLineups = false;
+  }
+}
+
+function updateLineupAutoBadge(status = "ok", allConfirmed = false) {
+  if (!els.lineupAutoBadge) return;
+  const confirmedCount = [...state.lineupStatusMap.values()].filter((s) => s.hasLineup).length;
+  const totalGames = state.games.length;
+
+  if (status === "loading") {
+    els.lineupAutoBadge.innerHTML = `
+      <span class="relative flex h-2 w-2">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+      </span>
+      <span>Auto-Bateadores: Consultando...</span>
+    `;
+    return;
+  }
+
+  if (status === "error") {
+    els.lineupAutoBadge.innerHTML = `
+      <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+      <span>Auto-Bateadores: Error</span>
+    `;
+    return;
+  }
+
+  if (allConfirmed || (totalGames > 0 && confirmedCount === totalGames)) {
+    els.lineupAutoBadge.innerHTML = `
+      <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+      <span>Auto-Bateadores: ${confirmedCount}/${totalGames} confirmadas (Completo)</span>
+    `;
+    return;
+  }
+
+  els.lineupAutoBadge.innerHTML = `
+    <span class="relative flex h-2 w-2">
+      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+      <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+    </span>
+    <span>Auto-Bateadores: ${confirmedCount}/${totalGames} confirmadas (30 min)</span>
+  `;
+}
+
 async function loadSlate() {
   setBusy(true, "Cargando partidos de la jornada...");
   clearResults();
@@ -283,6 +424,8 @@ async function loadSlate() {
     els.compareBtn.disabled = !state.selectedGamePk;
 
     if (!state.games.length) {
+      stopLineupPolling();
+      updateLineupAutoBadge("ok");
       setStatus("No hay partidos MLB para la fecha seleccionada.", "warn");
       return;
     }
@@ -291,7 +434,9 @@ async function loadSlate() {
     setStatus(`${state.games.length} partidos cargados. ${espnNote}.`, "ok");
     const prevDate = addDays(date, -1);
     runBackgroundCalibration([prevDate, date]);
+    startLineupPolling();
   } catch (error) {
+    stopLineupPolling();
     state.games = [];
     state.espnEvents = [];
     state.selectedGamePk = null;
@@ -1932,6 +2077,7 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
 
 function renderGames() {
   els.gameCount.textContent = state.games.length;
+  const scrollTop = els.gamesList ? els.gamesList.scrollTop : 0;
 
   if (!state.games.length) {
     els.gamesList.innerHTML = emptyState("Sin partidos para esta fecha.");
@@ -1948,6 +2094,15 @@ function renderGames() {
       const espnPitchers = extractEspnPitchers(findEspnEvent(game));
       const awayPitcherName = espnPitchers.away?.shortName || game.teams.away.probablePitcher?.fullName || "Abridor N/D";
       const homePitcherName = espnPitchers.home?.shortName || game.teams.home.probablePitcher?.fullName || "Abridor N/D";
+      
+      const lineupInfo = state.lineupStatusMap.get(game.gamePk);
+      let lineupBadgeHtml = "";
+      if (lineupInfo?.hasLineup) {
+        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-350 bg-emerald-100 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800/60"><i data-lucide="check-circle-2" class="h-3 w-3"></i> Lineup ${lineupInfo.source}</span>`;
+      } else {
+        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/50"><i data-lucide="clock" class="h-3 w-3"></i> Lineup pendiente</span>`;
+      }
+
       return `
         <button
           class="mb-2 w-full rounded-lg border px-3 py-3 text-left transition ${
@@ -1958,9 +2113,12 @@ function renderGames() {
           type="button"
           data-game-pk="${game.gamePk}"
         >
-          <div class="flex items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center justify-between gap-1.5">
             <span class="text-xs font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">${time}</span>
-            <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-800 dark:text-slate-100">${status}</span>
+            <div class="flex flex-wrap items-center gap-1.5">
+              ${lineupBadgeHtml}
+              <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-800 dark:text-slate-100">${status}</span>
+            </div>
           </div>
           <div class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
             <span class="truncate">${away.name}</span>
@@ -1976,6 +2134,8 @@ function renderGames() {
     })
     .join("");
 
+  if (els.gamesList) els.gamesList.scrollTop = scrollTop;
+
   els.gamesList.querySelectorAll("[data-game-pk]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedGamePk = Number(button.dataset.gamePk);
@@ -1986,6 +2146,8 @@ function renderGames() {
       if (window.lucide) window.lucide.createIcons();
     });
   });
+
+  if (window.lucide) window.lucide.createIcons();
 }
 
 function renderMatchupHeader(game) {

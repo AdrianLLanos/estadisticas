@@ -134,7 +134,7 @@ function setStadiumBackground(venueName) {
   }
 }
 
-const LINEUP_POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutos (media hora)
+const LINEUP_POLL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos
 
 const state = {
   games: [],
@@ -389,7 +389,7 @@ function updateLineupAutoBadge(status = "ok", allConfirmed = false) {
       <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
       <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
     </span>
-    <span>Auto-Bateadores: ${confirmedCount}/${totalGames} confirmadas (30 min)</span>
+    <span>Auto-Bateadores: ${confirmedCount}/${totalGames} confirmadas (3 min)</span>
   `;
 }
 

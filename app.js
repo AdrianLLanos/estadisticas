@@ -476,6 +476,8 @@ async function compareSelectedGame() {
       homeMlbPitcher, 
       awayRecent, 
       homeRecent, 
+      awaySplits,
+      homeSplits,
       openMeteoWeather, 
       awayBullpenRoster, 
       homeBullpenRoster,
@@ -487,8 +489,10 @@ async function compareSelectedGame() {
       getTeamStats(home.id),
       getPitcherStats(game.teams.away.probablePitcher?.id, season),
       getPitcherStats(game.teams.home.probablePitcher?.id, season),
-      getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
-      getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
+      getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id, season),
+      getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id, season),
+      getTeamHomeAwaySplits(away.id, season),
+      getTeamHomeAwaySplits(home.id, season),
       fetchOpenMeteoWeather(game.venue?.name, game.gameDate),
       fetchBullpenRoster(away.id, season, game.teams.away.probablePitcher?.id),
       fetchBullpenRoster(home.id, season, game.teams.home.probablePitcher?.id),
@@ -554,6 +558,8 @@ async function compareSelectedGame() {
       homePitcher,
       awayRecent,
       homeRecent,
+      awaySplits,
+      homeSplits,
       espnEvent,
       weather,
     });
@@ -587,7 +593,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, espnEvent, weather }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, awaySplits, homeSplits, espnEvent, weather }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
@@ -614,12 +620,12 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     role: "Local",
     seasonStats: homeStats,
   });
-  const awayLast10Metrics = aggregateRecentGames(awayRecent?.games || [], awayStats);
-  const homeLast10Metrics = aggregateRecentGames(homeRecent?.games || [], homeStats);
+  const awayLast10Metrics = awayRecent?.games?.length ? aggregateRecentGames(awayRecent.games, awayStats) : null;
+  const homeLast10Metrics = homeRecent?.games?.length ? aggregateRecentGames(homeRecent.games, homeStats) : null;
   const awayOverallMetrics = getFullTeamStatMetrics(awayStats);
   const homeOverallMetrics = getFullTeamStatMetrics(homeStats);
-  const awaySplitMetrics = awayTeamProfile.splits.away || awayOverallMetrics;
-  const homeSplitMetrics = homeTeamProfile.splits.home || homeOverallMetrics;
+  const awaySplitMetrics = awaySplits?.away || awayTeamProfile.splits.away || null;
+  const homeSplitMetrics = homeSplits?.home || homeTeamProfile.splits.home || null;
 
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
   const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
@@ -1282,58 +1288,129 @@ function generarPronosticoFinal(result) {
   };
 }
 
-async function getTeamRecentContext(teamId, referenceDate, probablePitcherId) {
+async function fetchTeamRecent10Games(teamId, referenceDate, season) {
+  let year = Number(season || (referenceDate ? String(referenceDate).split("-")[0] : new Date().getFullYear()));
+
+  for (let currentYear of [year, year - 1]) {
+    try {
+      const [hittingRes, pitchingRes] = await Promise.allSettled([
+        fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=gameLog&group=hitting&season=${currentYear}`),
+        fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=gameLog&group=pitching&season=${currentYear}`)
+      ]);
+
+      const hittingLogs = hittingRes.status === "fulfilled" ? hittingRes.value?.stats?.[0]?.splits || [] : [];
+      const pitchingLogs = pitchingRes.status === "fulfilled" ? pitchingRes.value?.stats?.[0]?.splits || [] : [];
+
+      if (hittingLogs.length > 0) {
+        const recentLogs = hittingLogs.slice(-10);
+        const parsedGames = recentLogs.map(hLog => {
+          const dateStr = hLog.date;
+          const pStat = pitchingLogs.find(p => p.date === dateStr)?.stat || {};
+          const hStat = hLog.stat || {};
+          const runsFor = number(hStat.runs);
+          const runsAllowed = number(pStat.runs) || number(pStat.earnedRuns);
+          const hits = number(hStat.hits);
+          const opponentHits = number(pStat.hits) || estimateHitsFromRuns(runsAllowed);
+          const hr = number(hStat.homeRuns);
+          const bb = number(hStat.baseOnBalls);
+          const ab = number(hStat.atBats) || 34;
+          const slg = number(hStat.slg) || LEAGUE.slg;
+          const isHome = hLog.isHome ?? true;
+
+          return {
+            gamePk: hLog.game?.gamePk || Math.random(),
+            date: dateStr,
+            isHome,
+            runsFor,
+            runsAllowed,
+            hits,
+            opponentHits,
+            win: runsFor > runsAllowed || Boolean(hLog.isWin),
+            totalRuns: runsFor + runsAllowed,
+            over: (runsFor + runsAllowed) >= LEAGUE.totalRunsLine,
+            bullpen: null,
+            hr,
+            bb,
+            lob: Math.max(1, hits + bb - runsFor),
+            ab,
+            slg,
+          };
+        });
+
+        if (parsedGames.length > 0) return parsedGames;
+      }
+    } catch (e) {
+      console.warn(`No se pudo obtener gameLog para el año ${currentYear}:`, e);
+    }
+  }
+
+  return [];
+}
+
+async function getTeamRecentContext(teamId, referenceDate, probablePitcherId, season) {
   const cacheKey = `${teamId}-${referenceDate}-${probablePitcherId || "na"}`;
   if (state.recentContexts.has(cacheKey)) return state.recentContexts.get(cacheKey);
 
   try {
+    let parsedGames = [];
     const end = addDays(referenceDate, -1);
-    const start = addDays(referenceDate, -90);
-    const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
-    const finalGames = (schedule.dates || [])
-      .flatMap((date) => date.games || [])
-      .filter((game) => game.status?.abstractGameState === "Final" &&
-                        game.status?.detailedState !== "Postponed" &&
-                        game.status?.detailedState !== "Cancelled" &&
-                        game.status?.detailedState !== "Rescheduled");
-    const games = finalGames.slice(-10);
-    const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
-    const parsedGames = [];
-    const bullpenGames = [];
-    const splitParsedGames = finalGames.map((game) => parseRecentTeamGame(game, null, teamId)).filter(Boolean);
+    const start = addDays(referenceDate, -120);
 
-    games.forEach((game, index) => {
-      const boxscore = boxscores[index].status === "fulfilled" ? boxscores[index].value : null;
-      const parsed = parseRecentTeamGame(game, boxscore, teamId);
-      if (!parsed) return;
-      parsedGames.push(parsed);
-      bullpenGames.push(parsed.bullpen);
-    });
+    try {
+      const schedule = await fetchJson(`${MLB_BASE}/schedule?sportId=1&teamId=${teamId}&startDate=${start}&endDate=${end}&hydrate=team,linescore`);
+      const finalGames = (schedule.dates || [])
+        .flatMap((date) => date.games || [])
+        .filter((game) => {
+          const state = String(game.status?.abstractGameState || game.status?.detailedState || "").toLowerCase();
+          const code = String(game.status?.statusCode || "").toLowerCase();
+          return (state.includes("final") || state.includes("completed") || code === "f") &&
+                 !state.includes("postponed") && !state.includes("cancelled");
+        });
 
-    const roster = await getActivePitchers(teamId, probablePitcherId);
+      if (finalGames.length >= 5) {
+        const games = finalGames.slice(-10);
+        const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
+        games.forEach((game, index) => {
+          const boxscore = boxscores[index].status === "fulfilled" ? boxscores[index].value : null;
+          const parsed = parseRecentTeamGame(game, boxscore, teamId);
+          if (parsed) parsedGames.push(parsed);
+        });
+      }
+    } catch (errSched) {
+      console.warn("Error consultando schedule para recientes:", errSched);
+    }
+
+    if (parsedGames.length < 5) {
+      const logGames = await fetchTeamRecent10Games(teamId, referenceDate, season);
+      if (logGames.length > 0) {
+        parsedGames = logGames;
+      }
+    }
+
+    const roster = await getActivePitchers(teamId, probablePitcherId).catch(() => ({ relieversAvailable: 7 }));
+    const bullpenGames = parsedGames.map(g => g.bullpen).filter(Boolean);
+
     const context = {
       games: parsedGames,
       splitGames: {
-        all: splitParsedGames.slice(-10),
-        home: splitParsedGames.filter((game) => game.isHome).slice(-10),
-        away: splitParsedGames.filter((game) => !game.isHome).slice(-10),
+        all: parsedGames,
+        home: parsedGames.filter((game) => game.isHome),
+        away: parsedGames.filter((game) => !game.isHome),
       },
       last10: aggregateRecentGames(parsedGames),
-      bullpen: aggregateBullpenGames(bullpenGames, referenceDate, roster.relieversAvailable),
+      bullpen: aggregateBullpenGames(bullpenGames, referenceDate, roster.relieversAvailable || 7),
       homeWinRate: locationWinRate(parsedGames, true),
       awayWinRate: locationWinRate(parsedGames, false),
     };
+
     setLimitedMapValue(state.recentContexts, cacheKey, context, MAX_RECENT_CONTEXT_CACHE);
     return context;
-  } catch {
+  } catch (err) {
+    console.warn("Error en getTeamRecentContext:", err);
     const neutral = {
       games: [],
-      splitGames: {
-        all: [],
-        home: [],
-        away: [],
-      },
-      last10: aggregateRecentGames([]),
+      splitGames: { all: [], home: [], away: [] },
+      last10: null,
       bullpen: aggregateBullpenGames([], referenceDate, 7),
       homeWinRate: 0.5,
       awayWinRate: 0.5,
@@ -1777,37 +1854,7 @@ function getFullTeamStatMetrics(teamStats) {
 function aggregateRecentGames(games, teamSeasonStats = {}) {
   const count = games.length;
   if (!count) {
-    const rPerG = teamSeasonStats.runsPerGame || LEAGUE.runsPerGame;
-    const raPerG = teamSeasonStats.runsAllowedPerGame || LEAGUE.runsAllowedPerGame;
-    const hPerG = teamSeasonStats.hitsPerGame || LEAGUE.hitsPerGame;
-    const hrPerG = teamSeasonStats.homeRunsPerGame || LEAGUE.homeRunsPerGame;
-    const bbPerG = teamSeasonStats.walksPerGame || LEAGUE.walksPerGame;
-    const slgVal = teamSeasonStats.slg || LEAGUE.slg;
-
-    const num = Math.max(0.1, hPerG + bbPerG - rPerG);
-    const den = Math.max(0.5, hPerG + bbPerG - 1.4 * hrPerG);
-    const lobPctVal = clamp((num / den) * 100, 50, 92);
-    const bbPctVal = clamp((bbPerG / (34 + bbPerG)) * 100, 5, 20);
-    const hrPctVal = clamp((hrPerG / 34) * 100, 0.8, 6.0);
-
-    return {
-      games: 0,
-      wins: 0,
-      losses: 0,
-      runsPerGame: rPerG,
-      runsForPerGame: rPerG,
-      runsAllowedPerGame: raPerG,
-      diff: rPerG - raPerG,
-      hitsPerGame: hPerG,
-      hitsAllowedPerGame: hPerG,
-      homeRunsTotal: Math.round(hrPerG * 10),
-      homeRunsPerGame: hrPerG,
-      hrPct: hrPctVal,
-      slg: slgVal,
-      lobPct: lobPctVal,
-      bbPct: bbPctVal,
-      overRate: 0.5,
-    };
+    return null;
   }
 
   const wins = games.filter((game) => game.win).length;
@@ -1822,7 +1869,7 @@ function aggregateRecentGames(games, teamSeasonStats = {}) {
   const bbTotal = sum(games.map((game) => game.bb || 0));
   const abTotal = sum(games.map((game) => game.ab || 34));
 
-  const hrPct = abTotal > 0 ? clamp((homeRunsTotal / abTotal) * 100, 0.5, 8.0) : 1.9;
+  const hrPct = abTotal > 0 ? (homeRunsTotal / abTotal) * 100 : (homeRunsPerGame / 34) * 100;
   const bbPct = (abTotal + bbTotal) > 0 ? clamp((bbTotal / (abTotal + bbTotal)) * 100, 4.0, 22.0) : 10.0;
 
   const totalH = sum(games.map(g => g.hits));
@@ -1831,9 +1878,7 @@ function aggregateRecentGames(games, teamSeasonStats = {}) {
   const lobDen = Math.max(0.5, totalH + bbTotal - (1.4 * homeRunsTotal));
   const lobPct = clamp((lobNum / lobDen) * 100, 50, 92);
 
-  const baseSlg = teamSeasonStats.slg || LEAGUE.slg;
-  const slgAdj = baseSlg * (1 + ((runsForPerGame - LEAGUE.runsPerGame) / LEAGUE.runsPerGame) * 0.2);
-  const slg = clamp(slgAdj, 0.20, 0.55);
+  const slg = average(games.map(g => g.slg || teamSeasonStats.slg || LEAGUE.slg));
 
   return {
     games: count,
@@ -1876,36 +1921,7 @@ function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviati
 function summarizeTeamSplit(games, seasonFallback = null) {
   const count = games.length;
   if (!count) {
-    const rG = Number.isFinite(seasonFallback?.runsPerGame) ? seasonFallback.runsPerGame : LEAGUE.runsPerGame;
-    const raG = Number.isFinite(seasonFallback?.runsAllowedPerGame) ? seasonFallback.runsAllowedPerGame : LEAGUE.runsAllowedPerGame;
-    const hG = Number.isFinite(seasonFallback?.hitsPerGame) ? seasonFallback.hitsPerGame : LEAGUE.hitsPerGame;
-    const hrG = Number.isFinite(seasonFallback?.homeRunsPerGame) ? seasonFallback.homeRunsPerGame : LEAGUE.homeRunsPerGame;
-    const bbG = Number.isFinite(seasonFallback?.walksPerGame) ? seasonFallback.walksPerGame : LEAGUE.walksPerGame;
-    const slgVal = Number.isFinite(seasonFallback?.slg) ? seasonFallback.slg : LEAGUE.slg;
-
-    const num = Math.max(0.1, hG + bbG - rG);
-    const den = Math.max(0.5, hG + bbG - 1.4 * hrG);
-    const lobPctVal = clamp((num / den) * 100, 50, 92);
-    const bbPctVal = clamp((bbG / (34 + bbG)) * 100, 5, 20);
-    const hrPctVal = clamp((hrG / 34) * 100, 0.8, 6.0);
-
-    return {
-      games: 0,
-      runsPerGame: rG,
-      runsForPerGame: rG,
-      runsAllowedPerGame: raG,
-      diff: rG - raG,
-      runDiffPerGame: rG - raG,
-      hitsPerGame: hG,
-      hitsAllowedPerGame: hG,
-      homeRunsTotal: Math.round(hrG * 81),
-      homeRunsPerGame: hrG,
-      hrPct: hrPctVal,
-      slg: slgVal,
-      lobPct: lobPctVal,
-      bbPct: bbPctVal,
-      overRate: null,
-    };
+    return null;
   }
 
   const runsForPerGame = average(games.map((game) => game.runsFor));
@@ -1918,7 +1934,7 @@ function summarizeTeamSplit(games, seasonFallback = null) {
   const bbTotal = sum(games.map((g) => g.bb || 0));
   const abTotal = sum(games.map((g) => g.ab || 34));
 
-  const hrPct = abTotal > 0 ? clamp((homeRunsTotal / abTotal) * 100, 0.5, 8.0) : 1.9;
+  const hrPct = abTotal > 0 ? (homeRunsTotal / abTotal) * 100 : (homeRunsPerGame / 34) * 100;
   const bbPct = (abTotal + bbTotal) > 0 ? clamp((bbTotal / (abTotal + bbTotal)) * 100, 4.0, 22.0) : 10.0;
 
   const totalH = sum(games.map(g => g.hits));
@@ -1927,9 +1943,7 @@ function summarizeTeamSplit(games, seasonFallback = null) {
   const lobDen = Math.max(0.5, totalH + bbTotal - (1.4 * homeRunsTotal));
   const lobPct = clamp((lobNum / lobDen) * 100, 50, 92);
 
-  const baseSlg = seasonFallback?.slg || LEAGUE.slg;
-  const slgAdj = baseSlg * (1 + ((runsForPerGame - LEAGUE.runsPerGame) / LEAGUE.runsPerGame) * 0.2);
-  const slg = clamp(slgAdj, 0.20, 0.55);
+  const slg = average(games.map(g => g.slg || seasonFallback?.slg || LEAGUE.slg));
 
   return {
     games: count,
@@ -2052,6 +2066,91 @@ async function getTeamStats(teamId) {
     };
     setLimitedMapValue(state.teamStats, teamId, fallbackValue, MAX_TEAM_CACHE);
     return fallbackValue;
+  }
+}
+
+async function getTeamHomeAwaySplits(teamId, season) {
+  const currentSeason = season || new Date().getFullYear();
+  const cacheKey = `split-${teamId}-${currentSeason}`;
+  if (state.teamSplits && state.teamSplits.has(cacheKey)) return state.teamSplits.get(cacheKey);
+
+  try {
+    const [homeAwayRes, sitSplitsRes] = await Promise.allSettled([
+      fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=homeAndAway&group=hitting,pitching&season=${currentSeason}`),
+      fetchJson(`${MLB_BASE}/teams/${teamId}/stats?stats=statSplits&group=hitting,pitching&sitCodes=h,a&season=${currentSeason}`)
+    ]);
+
+    let homeHitting = {}, awayHitting = {}, homePitching = {}, awayPitching = {};
+
+    if (homeAwayRes.status === "fulfilled" && homeAwayRes.value?.stats) {
+      const statsList = homeAwayRes.value.stats;
+      const hittingGroup = statsList.find(s => s.group?.displayName === "hitting")?.splits || [];
+      const pitchingGroup = statsList.find(s => s.group?.displayName === "pitching")?.splits || [];
+
+      homeHitting = hittingGroup.find(s => s.homeAway === "home")?.stat || {};
+      awayHitting = hittingGroup.find(s => s.homeAway === "away")?.stat || {};
+      homePitching = pitchingGroup.find(s => s.homeAway === "home")?.stat || {};
+      awayPitching = pitchingGroup.find(s => s.homeAway === "away")?.stat || {};
+    }
+
+    if (!homeHitting.gamesPlayed && sitSplitsRes.status === "fulfilled" && sitSplitsRes.value?.stats) {
+      const statsList = sitSplitsRes.value.stats;
+      const hittingGroup = statsList.find(s => s.group?.displayName === "hitting")?.splits || [];
+      const pitchingGroup = statsList.find(s => s.group?.displayName === "pitching")?.splits || [];
+
+      homeHitting = hittingGroup.find(s => s.situation?.code === "h" || s.split?.code === "h")?.stat || homeHitting;
+      awayHitting = hittingGroup.find(s => s.situation?.code === "a" || s.split?.code === "a")?.stat || awayHitting;
+      homePitching = pitchingGroup.find(s => s.situation?.code === "h" || s.split?.code === "h")?.stat || homePitching;
+      awayPitching = pitchingGroup.find(s => s.situation?.code === "a" || s.split?.code === "a")?.stat || awayPitching;
+    }
+
+    const buildSplitMetrics = (hitting, pitching) => {
+      const g = number(hitting.gamesPlayed) || number(pitching.gamesPlayed) || 0;
+      if (!g) return null;
+      const pitchG = number(pitching.gamesPlayed) || g;
+      const runsFor = number(hitting.runs);
+      const runsAllow = number(pitching.runs) || (number(pitching.earnedRuns) * 1.08);
+      const runsPerG = runsFor / g;
+      const runsAllowPerG = runsAllow / pitchG;
+      const hrTotal = number(hitting.homeRuns);
+      const ab = number(hitting.atBats);
+      const bb = number(hitting.baseOnBalls);
+      const hits = number(hitting.hits);
+      const slg = number(hitting.slg) || LEAGUE.slg;
+
+      const hrPct = ab > 0 ? (hrTotal / ab) * 100 : (runsPerG > 0 ? (hrTotal / g / 34) * 100 : 1.9);
+      const bbPct = (ab + bb) > 0 ? (bb / (ab + bb)) * 100 : 8.5;
+
+      const num = Math.max(0.1, hits + bb - runsFor);
+      const den = Math.max(0.5, hits + bb - 1.4 * hrTotal);
+      const lobPct = clamp((num / den) * 100, 50, 92);
+
+      return {
+        games: g,
+        runsPerGame: runsPerG,
+        runsForPerGame: runsPerG,
+        runsAllowedPerGame: runsAllowPerG,
+        diff: runsPerG - runsAllowPerG,
+        homeRunsTotal: hrTotal,
+        homeRunsPerGame: hrTotal / g,
+        hrPct,
+        slg,
+        lobPct,
+        bbPct,
+      };
+    };
+
+    const splitsObj = {
+      home: buildSplitMetrics(homeHitting, homePitching),
+      away: buildSplitMetrics(awayHitting, awayPitching),
+    };
+
+    if (!state.teamSplits) state.teamSplits = new Map();
+    setLimitedMapValue(state.teamSplits, cacheKey, splitsObj, MAX_TEAM_CACHE);
+    return splitsObj;
+  } catch (err) {
+    console.warn("Error al obtener los splits de local/visitante:", err);
+    return { home: null, away: null };
   }
 }
 
@@ -2810,15 +2909,30 @@ function renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, away
   const awayDiff = getNum(awayStats?.diff ?? (awayRuns !== null && awayRA !== null ? awayRuns - awayRA : null));
   const homeDiff = getNum(homeStats?.diff ?? (homeRuns !== null && homeRA !== null ? homeRuns - homeRA : null));
 
+  const awayHR = awayStats && Number.isFinite(awayStats.homeRunsTotal) ? awayStats.homeRunsTotal : (awayStats && Number.isFinite(awayStats.homeRunsPerGame) ? Math.round(awayStats.homeRunsPerGame * (awayStats.games || 10)) : null);
+  const homeHR = homeStats && Number.isFinite(homeStats.homeRunsTotal) ? homeStats.homeRunsTotal : (homeStats && Number.isFinite(homeStats.homeRunsPerGame) ? Math.round(homeStats.homeRunsPerGame * (homeStats.games || 10)) : null);
+
+  const awayHRPct = awayStats && Number.isFinite(awayStats.hrPct) ? `${awayStats.hrPct.toFixed(1)}%` : "N/D";
+  const homeHRPct = homeStats && Number.isFinite(homeStats.hrPct) ? `${homeStats.hrPct.toFixed(1)}%` : "N/D";
+
+  const awaySLG = awayStats && Number.isFinite(awayStats.slg) ? awayStats.slg.toFixed(2) : "N/D";
+  const homeSLG = homeStats && Number.isFinite(homeStats.slg) ? homeStats.slg.toFixed(2) : "N/D";
+
+  const awayLOB = awayStats && Number.isFinite(awayStats.lobPct) ? `${awayStats.lobPct.toFixed(1)}%` : "N/D";
+  const homeLOB = homeStats && Number.isFinite(homeStats.lobPct) ? `${homeStats.lobPct.toFixed(1)}%` : "N/D";
+
+  const awayBB = awayStats && Number.isFinite(awayStats.bbPct) ? `${awayStats.bbPct.toFixed(1)}%` : "N/D";
+  const homeBB = homeStats && Number.isFinite(homeStats.bbPct) ? `${homeStats.bbPct.toFixed(1)}%` : "N/D";
+
   const rows = [
     { label: "Runs / G", awayVal: awayRuns !== null ? awayRuns.toFixed(2) : "N/D", homeVal: homeRuns !== null ? homeRuns.toFixed(2) : "N/D", isHigherBetter: true, rawA: awayRuns, rawH: homeRuns },
     { label: "RA / G", awayVal: awayRA !== null ? awayRA.toFixed(2) : "N/D", homeVal: homeRA !== null ? homeRA.toFixed(2) : "N/D", isHigherBetter: false, rawA: awayRA, rawH: homeRA },
     { label: "Diff", awayVal: awayDiff !== null ? formatSigned(awayDiff) : "N/D", homeVal: homeDiff !== null ? formatSigned(homeDiff) : "N/D", isHigherBetter: true, rawA: awayDiff, rawH: homeDiff },
-    { label: "Homeruns", awayVal: awayStats?.homeRunsTotal ?? Math.round((awayStats?.homeRunsPerGame || 1.15) * 10), homeVal: homeStats?.homeRunsTotal ?? Math.round((homeStats?.homeRunsPerGame || 1.15) * 10), isHigherBetter: true, rawA: awayStats?.homeRunsTotal, rawH: homeStats?.homeRunsTotal },
-    { label: "HR %", awayVal: `${(awayStats?.hrPct ?? 1.9).toFixed(1)}%`, homeVal: `${(homeStats?.hrPct ?? 1.9).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.hrPct, rawH: homeStats?.hrPct },
-    { label: "SLG", awayVal: (awayStats?.slg ?? 0.40).toFixed(2), homeVal: (homeStats?.slg ?? 0.40).toFixed(2), isHigherBetter: true, rawA: awayStats?.slg, rawH: homeStats?.slg },
-    { label: "LOB %", awayVal: `${(awayStats?.lobPct ?? 71.3).toFixed(1)}%`, homeVal: `${(homeStats?.lobPct ?? 71.3).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.lobPct, rawH: homeStats?.lobPct },
-    { label: "BB %", awayVal: `${(awayStats?.bbPct ?? 8.7).toFixed(1)}%`, homeVal: `${(homeStats?.bbPct ?? 8.7).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.bbPct, rawH: homeStats?.bbPct },
+    { label: "Homeruns", awayVal: awayHR !== null ? awayHR : "N/D", homeVal: homeHR !== null ? homeHR : "N/D", isHigherBetter: true, rawA: awayHR, rawH: homeHR },
+    { label: "HR %", awayVal: awayHRPct, homeVal: homeHRPct, isHigherBetter: true, rawA: awayStats?.hrPct, rawH: homeStats?.hrPct },
+    { label: "SLG", awayVal: awaySLG, homeVal: homeSLG, isHigherBetter: true, rawA: awayStats?.slg, rawH: homeStats?.slg },
+    { label: "LOB %", awayVal: awayLOB, homeVal: homeLOB, isHigherBetter: true, rawA: awayStats?.lobPct, rawH: homeStats?.lobPct },
+    { label: "BB %", awayVal: awayBB, homeVal: homeBB, isHigherBetter: true, rawA: awayStats?.bbPct, rawH: homeStats?.bbPct },
   ];
 
   return `

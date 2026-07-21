@@ -163,6 +163,7 @@ const els = {
   statusBox: document.querySelector("#statusBox"),
   summaryGrid: document.querySelector("#summaryGrid"),
   pitcherGrid: document.querySelector("#pitcherGrid"),
+  teamStatsGrid: document.querySelector("#teamStatsGrid"),
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
   calibrationBadge: document.querySelector("#calibrationBadge"),
@@ -228,6 +229,7 @@ function toggleTheme() {
   updateThemeUI();
   if (state.activeProjection) {
     renderPredictor(state.activeProjection);
+    renderTeamStats(state.activeProjection);
   }
 }
 
@@ -566,6 +568,7 @@ async function compareSelectedGame() {
 
     renderSummary(projection);
     renderPitchers(projection);
+    renderTeamStats(projection);
     renderBullpens(projection);
     renderLineups(projection);
     renderResults(projection);
@@ -601,6 +604,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     logo: espnTeams.away?.logo,
     abbreviation: espnTeams.away?.abbreviation,
     role: "Visitante",
+    seasonStats: awayStats,
   });
   const homeTeamProfile = buildTeamSplitProfile({
     team: homeTeam,
@@ -608,11 +612,19 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     logo: espnTeams.home?.logo,
     abbreviation: espnTeams.home?.abbreviation,
     role: "Local",
+    seasonStats: homeStats,
   });
+  const awayLast10Metrics = aggregateRecentGames(awayRecent?.games || [], awayStats);
+  const homeLast10Metrics = aggregateRecentGames(homeRecent?.games || [], homeStats);
+  const awayOverallMetrics = getFullTeamStatMetrics(awayStats);
+  const homeOverallMetrics = getFullTeamStatMetrics(homeStats);
+  const awaySplitMetrics = awayTeamProfile.splits.away || awayOverallMetrics;
+  const homeSplitMetrics = homeTeamProfile.splits.home || homeOverallMetrics;
+
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
   const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
-  const awayOffense = calcularOfensivaEquipo(awayStats, homePitcherMetrics.hand);
-  const homeOffense = calcularOfensivaEquipo(homeStats, awayPitcherMetrics.hand);
+  const awayOffense = calcularOfensivaEquipo(awayStats, homePitcherMetrics.hand, awayLast10Metrics);
+  const homeOffense = calcularOfensivaEquipo(homeStats, awayPitcherMetrics.hand, homeLast10Metrics);
   const awayForm = calcularFormaReciente(awayRecent);
   const homeForm = calcularFormaReciente(homeRecent);
   const awayBullpen = calcularBullpenAproximado(awayRecent?.bullpen);
@@ -639,6 +651,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     opponentBullpen: homeBullpen,
     recentForm: awayForm,
     matchup: awayMatchup,
+    last10Metrics: awayLast10Metrics,
   });
   const homeRunsBase = proyectarCarrerasEquipo({
     splitBaseRuns: homeSplitBaseRuns,
@@ -646,6 +659,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     opponentBullpen: awayBullpen,
     recentForm: homeForm,
     matchup: homeMatchup,
+    last10Metrics: homeLast10Metrics,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
   const parkFactor = obtenerParkFactor(game);
@@ -920,6 +934,12 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     homeAlternateColor: espnTeams.home?.alternateColor || "",
     awayAbbreviation: espnTeams.away?.abbreviation || game.teams.away.team.abbreviation || "",
     homeAbbreviation: espnTeams.home?.abbreviation || game.teams.home.team.abbreviation || "",
+    awayOverallMetrics,
+    homeOverallMetrics,
+    awaySplitMetrics,
+    homeSplitMetrics,
+    awayLast10Metrics,
+    homeLast10Metrics,
     pitchers: {
       away: awayPitcher,
       home: homePitcher,
@@ -1039,18 +1059,30 @@ function calcularMetricasPitcher(pitcher = {}) {
   return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
 
-function calcularOfensivaEquipo(team = {}, opponentHand = "R") {
+function calcularOfensivaEquipo(team = {}, opponentHand = "R", last10Metrics = null) {
   const splitOps = opponentHand === "L" ? team.opsVsLeft : team.opsVsRight;
+  let runsPerGame = fallback(team.runsPerGame, LEAGUE.runsPerGame);
+  let hitsPerGame = fallback(team.hitsPerGame, LEAGUE.hitsPerGame);
+  let slg = fallback(team.slg, LEAGUE.slg);
+  let homeRunsPerGame = fallback(team.homeRunsPerGame, LEAGUE.homeRunsPerGame);
+
+  if (last10Metrics && last10Metrics.games > 0) {
+    runsPerGame = 0.70 * runsPerGame + 0.30 * last10Metrics.runsForPerGame;
+    hitsPerGame = 0.70 * hitsPerGame + 0.30 * last10Metrics.hitsPerGame;
+    if (last10Metrics.slg) slg = 0.70 * slg + 0.30 * last10Metrics.slg;
+    if (last10Metrics.homeRunsPerGame) homeRunsPerGame = 0.70 * homeRunsPerGame + 0.30 * last10Metrics.homeRunsPerGame;
+  }
+
   const metrics = {
-    runsPerGame: fallback(team.runsPerGame, LEAGUE.runsPerGame),
-    hitsPerGame: fallback(team.hitsPerGame, LEAGUE.hitsPerGame),
+    runsPerGame,
+    hitsPerGame,
     ops: fallback(splitOps, fallback(team.ops, LEAGUE.ops)),
     obp: fallback(team.obp, LEAGUE.obp),
-    slg: fallback(team.slg, LEAGUE.slg),
+    slg,
     battingAverage: fallback(team.battingAverage, LEAGUE.battingAverage),
     strikeoutsPerGame: fallback(team.strikeoutsPerGame, LEAGUE.strikeoutsPerGame),
     walksPerGame: fallback(team.walksPerGame, LEAGUE.walksPerGame),
-    homeRunsPerGame: fallback(team.homeRunsPerGame, LEAGUE.homeRunsPerGame),
+    homeRunsPerGame,
   };
   const score =
     normalizeHigher(metrics.runsPerGame, 3.2, 5.8) * 0.23 +
@@ -1156,7 +1188,7 @@ function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallb
   return clamp((offenseRuns + defenseRunsAllowed) / 2, 2.0, 8.5);
 }
 
-function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup }) {
+function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null }) {
   // Pitcher factor: starting pitcher ERA relative to league average and their score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
   const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.30;
@@ -1173,7 +1205,11 @@ function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullp
   // Matchup factor
   const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.20;
 
-  const baseExpectedRuns = fallback(splitBaseRuns, LEAGUE.runsPerGame);
+  let baseExpectedRuns = fallback(splitBaseRuns, LEAGUE.runsPerGame);
+  if (last10Metrics && last10Metrics.runsForPerGame) {
+    baseExpectedRuns = 0.70 * baseExpectedRuns + 0.30 * last10Metrics.runsForPerGame;
+  }
+
   const raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor;
 
   return clamp(raw, 2.0, 8.5);
@@ -1665,6 +1701,16 @@ function computeLineupStats(playersResolved, opponentHand, teamStats) {
   };
 }
 
+function parseTeamBattingFromBoxscore(teamBlock, teamScore, teamHits) {
+  const b = teamBlock?.teamStats?.batting || {};
+  const hr = Number.isFinite(number(b.homeRuns)) && b.homeRuns !== undefined ? number(b.homeRuns) : Math.max(0, Math.round(teamScore * 0.22));
+  const bb = Number.isFinite(number(b.baseOnBalls)) && b.baseOnBalls !== undefined ? number(b.baseOnBalls) : Math.max(1, Math.round(teamScore * 0.65));
+  const lob = Number.isFinite(number(b.leftOnBase)) && b.leftOnBase !== undefined ? number(b.leftOnBase) : Math.max(2, Math.round((teamHits + bb - teamScore) * 0.9));
+  const ab = number(b.atBats) || 34;
+  const slg = number(b.slg) || 0.400;
+  return { hr, bb, lob, ab, slg };
+}
+
 function parseRecentTeamGame(game, boxscore, teamId) {
   const side = game.teams?.home?.team?.id === teamId ? "home" : game.teams?.away?.team?.id === teamId ? "away" : null;
   if (!side) return null;
@@ -1676,6 +1722,7 @@ function parseRecentTeamGame(game, boxscore, teamId) {
   const opponentHits = number(linescore?.[opponentSide]?.hits);
   const teamBlock = boxscore?.teams?.[side];
   const bullpen = parseBullpenFromBoxscore(teamBlock, game.officialDate);
+  const batting = parseTeamBattingFromBoxscore(teamBlock, teamScore, teamHits || estimateHitsFromRuns(teamScore));
 
   return {
     gamePk: game.gamePk,
@@ -1689,77 +1736,132 @@ function parseRecentTeamGame(game, boxscore, teamId) {
     totalRuns: teamScore + opponentScore,
     over: teamScore + opponentScore >= LEAGUE.totalRunsLine,
     bullpen,
+    hr: batting.hr,
+    bb: batting.bb,
+    lob: batting.lob,
+    ab: batting.ab,
+    slg: batting.slg,
   };
 }
 
-function parseBullpenFromBoxscore(teamBlock, officialDate) {
-  const pitcherIds = teamBlock?.pitchers || [];
-  const starterId = pitcherIds[0];
-  const result = {
-    date: officialDate,
-    innings: 0,
-    runs: 0,
-    earnedRuns: 0,
-    hits: 0,
-    walks: 0,
-    pitches: 0,
-    relieversUsed: 0,
-    relieverIds: [],
+function getFullTeamStatMetrics(teamStats) {
+  const g = teamStats.games || 162;
+  const rG = teamStats.runsPerGame || LEAGUE.runsPerGame;
+  const raG = teamStats.runsAllowedPerGame || LEAGUE.runsAllowedPerGame;
+  const diff = rG - raG;
+  const hrG = teamStats.homeRunsPerGame || LEAGUE.homeRunsPerGame;
+  const hrTotal = Math.round(hrG * g);
+  const hrPct = clamp((hrG / 34) * 100, 0.8, 6.0);
+  const slg = teamStats.slg || LEAGUE.slg;
+  const bbG = teamStats.walksPerGame || LEAGUE.walksPerGame;
+  const hG = teamStats.hitsPerGame || LEAGUE.hitsPerGame;
+
+  const num = Math.max(0.1, hG + bbG - rG);
+  const den = Math.max(0.5, hG + bbG - 1.4 * hrG);
+  const lobPct = clamp((num / den) * 100, 50, 92);
+  const bbPct = clamp((bbG / (34 + bbG)) * 100, 5, 20);
+
+  return {
+    runsPerGame: rG,
+    runsAllowedPerGame: raG,
+    diff,
+    homeRunsTotal: hrTotal,
+    homeRunsPerGame: hrG,
+    hrPct,
+    slg,
+    lobPct,
+    bbPct,
   };
-
-  pitcherIds.slice(1).forEach((pitcherId) => {
-    if (!pitcherId || pitcherId === starterId) return;
-    const player = teamBlock.players?.[`ID${pitcherId}`];
-    const pitching = player?.stats?.pitching;
-    const innings = inningsToNumber(pitching?.inningsPitched);
-    if (!innings) return;
-    result.innings += innings;
-    result.runs += number(pitching.runs);
-    result.earnedRuns += number(pitching.earnedRuns);
-    result.hits += number(pitching.hits);
-    result.walks += number(pitching.baseOnBalls);
-    result.pitches += number(pitching.pitchesThrown);
-    result.relieversUsed += 1;
-    result.relieverIds.push(pitcherId);
-  });
-
-  return result;
 }
 
-function aggregateRecentGames(games) {
+function aggregateRecentGames(games, teamSeasonStats = {}) {
   const count = games.length;
   if (!count) {
+    const rPerG = teamSeasonStats.runsPerGame || LEAGUE.runsPerGame;
+    const raPerG = teamSeasonStats.runsAllowedPerGame || LEAGUE.runsAllowedPerGame;
+    const hPerG = teamSeasonStats.hitsPerGame || LEAGUE.hitsPerGame;
+    const hrPerG = teamSeasonStats.homeRunsPerGame || LEAGUE.homeRunsPerGame;
+    const bbPerG = teamSeasonStats.walksPerGame || LEAGUE.walksPerGame;
+    const slgVal = teamSeasonStats.slg || LEAGUE.slg;
+
+    const num = Math.max(0.1, hPerG + bbPerG - rPerG);
+    const den = Math.max(0.5, hPerG + bbPerG - 1.4 * hrPerG);
+    const lobPctVal = clamp((num / den) * 100, 50, 92);
+    const bbPctVal = clamp((bbPerG / (34 + bbPerG)) * 100, 5, 20);
+    const hrPctVal = clamp((hrPerG / 34) * 100, 0.8, 6.0);
+
     return {
       games: 0,
       wins: 0,
       losses: 0,
-      runsForPerGame: LEAGUE.runsPerGame,
-      runsAllowedPerGame: LEAGUE.runsPerGame,
-      hitsPerGame: LEAGUE.hitsPerGame,
-      hitsAllowedPerGame: LEAGUE.hitsPerGame,
+      runsPerGame: rPerG,
+      runsForPerGame: rPerG,
+      runsAllowedPerGame: raPerG,
+      diff: rPerG - raPerG,
+      hitsPerGame: hPerG,
+      hitsAllowedPerGame: hPerG,
+      homeRunsTotal: Math.round(hrPerG * 10),
+      homeRunsPerGame: hrPerG,
+      hrPct: hrPctVal,
+      slg: slgVal,
+      lobPct: lobPctVal,
+      bbPct: bbPctVal,
       overRate: 0.5,
     };
   }
 
+  const wins = games.filter((game) => game.win).length;
+  const losses = count - wins;
+  const runsForPerGame = average(games.map((game) => game.runsFor));
+  const runsAllowedPerGame = average(games.map((game) => game.runsAllowed));
+  const hitsPerGame = average(games.map((game) => game.hits));
+  const hitsAllowedPerGame = average(games.map((game) => game.opponentHits));
+
+  const homeRunsTotal = sum(games.map((game) => game.hr || 0));
+  const homeRunsPerGame = count > 0 ? homeRunsTotal / count : LEAGUE.homeRunsPerGame;
+  const bbTotal = sum(games.map((game) => game.bb || 0));
+  const abTotal = sum(games.map((game) => game.ab || 34));
+
+  const hrPct = abTotal > 0 ? clamp((homeRunsTotal / abTotal) * 100, 0.5, 8.0) : 1.9;
+  const bbPct = (abTotal + bbTotal) > 0 ? clamp((bbTotal / (abTotal + bbTotal)) * 100, 4.0, 22.0) : 10.0;
+
+  const totalH = sum(games.map(g => g.hits));
+  const totalR = sum(games.map(g => g.runsFor));
+  const lobNum = Math.max(0.1, totalH + bbTotal - totalR);
+  const lobDen = Math.max(0.5, totalH + bbTotal - (1.4 * homeRunsTotal));
+  const lobPct = clamp((lobNum / lobDen) * 100, 50, 92);
+
+  const baseSlg = teamSeasonStats.slg || LEAGUE.slg;
+  const slgAdj = baseSlg * (1 + ((runsForPerGame - LEAGUE.runsPerGame) / LEAGUE.runsPerGame) * 0.2);
+  const slg = clamp(slgAdj, 0.20, 0.55);
+
   return {
     games: count,
-    wins: games.filter((game) => game.win).length,
-    losses: games.filter((game) => !game.win).length,
-    runsForPerGame: average(games.map((game) => game.runsFor)),
-    runsAllowedPerGame: average(games.map((game) => game.runsAllowed)),
-    hitsPerGame: average(games.map((game) => game.hits)),
-    hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
+    wins,
+    losses,
+    runsPerGame: runsForPerGame,
+    runsForPerGame,
+    runsAllowedPerGame,
+    diff: runsForPerGame - runsAllowedPerGame,
+    hitsPerGame,
+    hitsAllowedPerGame,
+    homeRunsTotal,
+    homeRunsPerGame,
+    hrPct,
+    slg,
+    lobPct,
+    bbPct,
     overRate: games.filter((game) => game.over).length / count,
   };
 }
 
-function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviation = "", role = "" }) {
+function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviation = "", role = "", seasonStats = null }) {
   const games = recentContext?.games || [];
   const splitGames = recentContext?.splitGames || {};
   const splits = {
-    all: summarizeTeamSplit(splitGames.all || games),
-    home: summarizeTeamSplit(splitGames.home || games.filter((game) => game.isHome)),
-    away: summarizeTeamSplit(splitGames.away || games.filter((game) => !game.isHome)),
+    all: summarizeTeamSplit(splitGames.all || games, seasonStats),
+    home: summarizeTeamSplit(splitGames.home || games.filter((game) => game.isHome), seasonStats),
+    away: summarizeTeamSplit(splitGames.away || games.filter((game) => !game.isHome), seasonStats),
   };
 
   return {
@@ -1774,30 +1876,76 @@ function buildTeamSplitProfile({ team, recentContext = {}, logo = "", abbreviati
 function summarizeTeamSplit(games, seasonFallback = null) {
   const count = games.length;
   if (!count) {
+    const rG = Number.isFinite(seasonFallback?.runsPerGame) ? seasonFallback.runsPerGame : LEAGUE.runsPerGame;
+    const raG = Number.isFinite(seasonFallback?.runsAllowedPerGame) ? seasonFallback.runsAllowedPerGame : LEAGUE.runsAllowedPerGame;
+    const hG = Number.isFinite(seasonFallback?.hitsPerGame) ? seasonFallback.hitsPerGame : LEAGUE.hitsPerGame;
+    const hrG = Number.isFinite(seasonFallback?.homeRunsPerGame) ? seasonFallback.homeRunsPerGame : LEAGUE.homeRunsPerGame;
+    const bbG = Number.isFinite(seasonFallback?.walksPerGame) ? seasonFallback.walksPerGame : LEAGUE.walksPerGame;
+    const slgVal = Number.isFinite(seasonFallback?.slg) ? seasonFallback.slg : LEAGUE.slg;
+
+    const num = Math.max(0.1, hG + bbG - rG);
+    const den = Math.max(0.5, hG + bbG - 1.4 * hrG);
+    const lobPctVal = clamp((num / den) * 100, 50, 92);
+    const bbPctVal = clamp((bbG / (34 + bbG)) * 100, 5, 20);
+    const hrPctVal = clamp((hrG / 34) * 100, 0.8, 6.0);
+
     return {
       games: 0,
-      runsForPerGame: Number.isFinite(seasonFallback?.runsPerGame) ? seasonFallback.runsPerGame : null,
-      runsAllowedPerGame: Number.isFinite(seasonFallback?.runsAllowedPerGame) ? seasonFallback.runsAllowedPerGame : null,
-      runDiffPerGame:
-        Number.isFinite(seasonFallback?.runsPerGame) && Number.isFinite(seasonFallback?.runsAllowedPerGame)
-          ? seasonFallback.runsPerGame - seasonFallback.runsAllowedPerGame
-          : null,
-      hitsPerGame: Number.isFinite(seasonFallback?.hitsPerGame) ? seasonFallback.hitsPerGame : null,
-      hitsAllowedPerGame: Number.isFinite(seasonFallback?.hitsAllowedPerGame) ? seasonFallback.hitsAllowedPerGame : null,
+      runsPerGame: rG,
+      runsForPerGame: rG,
+      runsAllowedPerGame: raG,
+      diff: rG - raG,
+      runDiffPerGame: rG - raG,
+      hitsPerGame: hG,
+      hitsAllowedPerGame: hG,
+      homeRunsTotal: Math.round(hrG * 81),
+      homeRunsPerGame: hrG,
+      hrPct: hrPctVal,
+      slg: slgVal,
+      lobPct: lobPctVal,
+      bbPct: bbPctVal,
       overRate: null,
     };
   }
 
   const runsForPerGame = average(games.map((game) => game.runsFor));
   const runsAllowedPerGame = average(games.map((game) => game.runsAllowed));
+  const hitsPerGame = average(games.map((game) => game.hits));
+  const hitsAllowedPerGame = average(games.map((game) => game.opponentHits));
+
+  const homeRunsTotal = sum(games.map((g) => g.hr || 0));
+  const homeRunsPerGame = count > 0 ? homeRunsTotal / count : (seasonFallback?.homeRunsPerGame || LEAGUE.homeRunsPerGame);
+  const bbTotal = sum(games.map((g) => g.bb || 0));
+  const abTotal = sum(games.map((g) => g.ab || 34));
+
+  const hrPct = abTotal > 0 ? clamp((homeRunsTotal / abTotal) * 100, 0.5, 8.0) : 1.9;
+  const bbPct = (abTotal + bbTotal) > 0 ? clamp((bbTotal / (abTotal + bbTotal)) * 100, 4.0, 22.0) : 10.0;
+
+  const totalH = sum(games.map(g => g.hits));
+  const totalR = sum(games.map(g => g.runsFor));
+  const lobNum = Math.max(0.1, totalH + bbTotal - totalR);
+  const lobDen = Math.max(0.5, totalH + bbTotal - (1.4 * homeRunsTotal));
+  const lobPct = clamp((lobNum / lobDen) * 100, 50, 92);
+
+  const baseSlg = seasonFallback?.slg || LEAGUE.slg;
+  const slgAdj = baseSlg * (1 + ((runsForPerGame - LEAGUE.runsPerGame) / LEAGUE.runsPerGame) * 0.2);
+  const slg = clamp(slgAdj, 0.20, 0.55);
 
   return {
     games: count,
+    runsPerGame: runsForPerGame,
     runsForPerGame,
     runsAllowedPerGame,
+    diff: runsForPerGame - runsAllowedPerGame,
     runDiffPerGame: runsForPerGame - runsAllowedPerGame,
-    hitsPerGame: average(games.map((game) => game.hits)),
-    hitsAllowedPerGame: average(games.map((game) => game.opponentHits)),
+    hitsPerGame,
+    hitsAllowedPerGame,
+    homeRunsTotal,
+    homeRunsPerGame,
+    hrPct,
+    slg,
+    lobPct,
+    bbPct,
     overRate: games.filter((game) => game.over).length / count,
   };
 }
@@ -2585,6 +2733,146 @@ function renderPitchers(projection) {
       </div>
     </section>
   `;
+}
+
+function renderTeamStats(projection) {
+  if (!els.teamStatsGrid) return;
+
+  const awayTeam = projection.game.teams.away.team;
+  const homeTeam = projection.game.teams.home.team;
+  const awayName = projection.awayName;
+  const homeName = projection.homeName;
+  const awayLogo = mlbTeamLogoUrl(awayTeam.id);
+  const homeLogo = mlbTeamLogoUrl(homeTeam.id);
+
+  const awayOverall = projection.awayOverallMetrics;
+  const homeOverall = projection.homeOverallMetrics;
+
+  const awaySplit = projection.awaySplitMetrics;
+  const homeSplit = projection.homeSplitMetrics;
+
+  const awayLast10 = projection.awayLast10Metrics;
+  const homeLast10 = projection.homeLast10Metrics;
+
+  els.teamStatsGrid.innerHTML = `
+    <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800 gap-1">
+        <div class="flex items-center gap-2">
+          <i data-lucide="bar-chart-2" class="h-4 w-4 text-emerald-600 dark:text-emerald-400"></i>
+          <h3 class="text-base font-black text-slate-900 dark:text-white">Estadísticas por Equipo (Comparativa)</h3>
+        </div>
+        <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">General vs Split vs Últimos 10 Juegos</span>
+      </div>
+
+      <div class="p-4 grid gap-5 grid-cols-1 lg:grid-cols-3">
+        <!-- 1. General (Temporada) -->
+        <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 p-3">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-slate-700 dark:text-slate-300">General (Temporada)</span>
+            <span class="text-[10px] font-bold text-slate-500">162 G Target</span>
+          </div>
+          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayOverall, homeOverall)}
+        </div>
+
+        <!-- 2. Split (Local / Visitante) -->
+        <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 p-3">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Split (Visitante / Local)</span>
+            <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Por Condición</span>
+          </div>
+          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awaySplit, homeSplit)}
+        </div>
+
+        <!-- 3. Últimos 10 Juegos -->
+        <div class="rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-950/10 p-3">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-amber-200 dark:border-amber-900/50">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-amber-800 dark:text-amber-300">Últimos 10 Juegos</span>
+            <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400">Forma Reciente</span>
+          </div>
+          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayLast10, homeLast10)}
+        </div>
+      </div>
+    </section>
+  `;
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayStats, homeStats) {
+  const getNum = (val) => (Number.isFinite(val) && val !== null && val !== undefined ? val : null);
+
+  const awayRuns = getNum(awayStats?.runsPerGame ?? awayStats?.runsForPerGame);
+  const homeRuns = getNum(homeStats?.runsPerGame ?? homeStats?.runsForPerGame);
+
+  const awayRA = getNum(awayStats?.runsAllowedPerGame);
+  const homeRA = getNum(homeStats?.runsAllowedPerGame);
+
+  const awayDiff = getNum(awayStats?.diff ?? (awayRuns !== null && awayRA !== null ? awayRuns - awayRA : null));
+  const homeDiff = getNum(homeStats?.diff ?? (homeRuns !== null && homeRA !== null ? homeRuns - homeRA : null));
+
+  const rows = [
+    { label: "Runs / G", awayVal: awayRuns !== null ? awayRuns.toFixed(2) : "N/D", homeVal: homeRuns !== null ? homeRuns.toFixed(2) : "N/D", isHigherBetter: true, rawA: awayRuns, rawH: homeRuns },
+    { label: "RA / G", awayVal: awayRA !== null ? awayRA.toFixed(2) : "N/D", homeVal: homeRA !== null ? homeRA.toFixed(2) : "N/D", isHigherBetter: false, rawA: awayRA, rawH: homeRA },
+    { label: "Diff", awayVal: awayDiff !== null ? formatSigned(awayDiff) : "N/D", homeVal: homeDiff !== null ? formatSigned(homeDiff) : "N/D", isHigherBetter: true, rawA: awayDiff, rawH: homeDiff },
+    { label: "Homeruns", awayVal: awayStats?.homeRunsTotal ?? Math.round((awayStats?.homeRunsPerGame || 1.15) * 10), homeVal: homeStats?.homeRunsTotal ?? Math.round((homeStats?.homeRunsPerGame || 1.15) * 10), isHigherBetter: true, rawA: awayStats?.homeRunsTotal, rawH: homeStats?.homeRunsTotal },
+    { label: "HR %", awayVal: `${(awayStats?.hrPct ?? 1.9).toFixed(1)}%`, homeVal: `${(homeStats?.hrPct ?? 1.9).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.hrPct, rawH: homeStats?.hrPct },
+    { label: "SLG", awayVal: (awayStats?.slg ?? 0.40).toFixed(2), homeVal: (homeStats?.slg ?? 0.40).toFixed(2), isHigherBetter: true, rawA: awayStats?.slg, rawH: homeStats?.slg },
+    { label: "LOB %", awayVal: `${(awayStats?.lobPct ?? 71.3).toFixed(1)}%`, homeVal: `${(homeStats?.lobPct ?? 71.3).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.lobPct, rawH: homeStats?.lobPct },
+    { label: "BB %", awayVal: `${(awayStats?.bbPct ?? 8.7).toFixed(1)}%`, homeVal: `${(homeStats?.bbPct ?? 8.7).toFixed(1)}%`, isHigherBetter: true, rawA: awayStats?.bbPct, rawH: homeStats?.bbPct },
+  ];
+
+  return `
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-[11px] text-slate-500 dark:text-slate-400 border-b border-slate-200/60 dark:border-slate-800">
+          <th class="py-1 text-left font-bold truncate max-w-[75px]">Stats</th>
+          <th class="py-1 text-center font-bold">
+            <div class="flex items-center justify-center gap-1">
+              <img src="${awayLogo}" class="w-3.5 h-3.5 object-contain img-smooth" alt="" />
+              <span class="truncate max-w-[70px]">${awayName}</span>
+            </div>
+          </th>
+          <th class="py-1 text-center font-bold">
+            <div class="flex items-center justify-center gap-1">
+              <img src="${homeLogo}" class="w-3.5 h-3.5 object-contain img-smooth" alt="" />
+              <span class="truncate max-w-[70px]">${homeName}</span>
+            </div>
+          </th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60 font-semibold">
+        ${rows.map(r => {
+          const numA = r.rawA !== undefined ? r.rawA : parseFloat(r.awayVal);
+          const numH = r.rawH !== undefined ? r.rawH : parseFloat(r.homeVal);
+          let aClass = "text-slate-700 dark:text-slate-200";
+          let hClass = "text-slate-700 dark:text-slate-200";
+
+          if (Number.isFinite(numA) && Number.isFinite(numH) && numA !== numH) {
+            if (r.isHigherBetter) {
+              if (numA > numH) aClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
+              else hClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
+            } else {
+              if (numA < numH) aClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
+              else hClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
+            }
+          }
+
+          return `
+            <tr>
+              <td class="py-1 text-slate-500 dark:text-slate-400 font-medium">${r.label}</td>
+              <td class="py-1 text-center ${aClass}">${r.awayVal ?? "N/D"}</td>
+              <td class="py-1 text-center ${hClass}">${r.homeVal ?? "N/D"}</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function formatSigned(val) {
+  if (!Number.isFinite(val)) return "0.00";
+  return (val > 0 ? "+" : "") + val.toFixed(2);
 }
 
 function renderBullpens(projection) {

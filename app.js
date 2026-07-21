@@ -202,21 +202,25 @@ function scheduleMidnightReset() {
   const msToMidnight = nextMidnight.getTime() - now.getTime();
 
   setTimeout(() => {
-    console.log("Rollover a medianoche: Limpiando caches y cargando nueva jornada...");
+    console.log("Rollover a medianoche: Limpiando caches y actualizando jornada...");
     
-    // Limpiar absolutamente todas las caches en memoria
+    // Limpiar caches en memoria para datos frescos del nuevo día
     state.weatherCache.clear();
     state.teamStats.clear();
     state.pitcherStats.clear();
     state.recentContexts.clear();
     
-    // Actualizar el selector de fecha al día de hoy
+    const newDateStr = toDateInputValue(new Date());
+    
+    // Actualizar el selector de fecha al nuevo día
     if (els.dateInput) {
-      els.dateInput.value = toDateInputValue(new Date());
+      els.dateInput.value = newDateStr;
     }
     
-    // Cargar automáticamente la nueva cartelera
-    loadSlate();
+    // Cargar automáticamente la nueva cartelera avisando al usuario de forma transparente
+    loadSlate().then(() => {
+      setStatus(`📅 Cambio de fecha automático: Se ha cargado la jornada del ${newDateStr}.`, "ok");
+    });
     
     // Agendar el reinicio para el siguiente día
     scheduleMidnightReset();
@@ -413,10 +417,20 @@ async function loadSlate() {
       throw new Error("MLB Stats API no respondió correctamente.");
     }
 
-    const rawGames = mlbResult.value?.dates?.[0]?.games || [];
-    state.games = rawGames.filter(game => {
+    // Buscar el grupo de la fecha solicitada de forma exacta en la respuesta de la MLB
+    const dateGroup = mlbResult.value?.dates?.find((d) => d.date === date) || mlbResult.value?.dates?.[0];
+    const rawGames = dateGroup?.games || [];
+
+    state.games = rawGames.filter((game) => {
+      // 1. Filtrar partidos cuyo officialDate coincida exactamente con la fecha seleccionada
+      const officialDate = game.officialDate || (game.gameDate ? game.gameDate.slice(0, 10) : "");
+      const matchesTargetDate = !officialDate || officialDate === date;
+
+      // 2. Descartar partidos cancelados, postergados o reprogramados
       const detailedState = game.status?.detailedState;
-      return detailedState !== "Postponed" && detailedState !== "Cancelled" && detailedState !== "Rescheduled";
+      const isNotPostponed = detailedState !== "Postponed" && detailedState !== "Cancelled" && detailedState !== "Rescheduled";
+
+      return matchesTargetDate && isNotPostponed;
     });
     state.espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
     state.selectedGamePk = state.games[0]?.gamePk || null;
@@ -2323,7 +2337,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
 }
 
 function renderGames() {
-  els.gameCount.textContent = state.games.length;
+  const currentDate = els.dateInput?.value || "";
+  els.gameCount.textContent = currentDate ? `${state.games.length} (${currentDate})` : state.games.length;
   const scrollTop = els.gamesList ? els.gamesList.scrollTop : 0;
 
   if (!state.games.length) {

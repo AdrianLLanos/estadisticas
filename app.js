@@ -817,60 +817,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   else if (finalHitsProb >= 0.53) finalHitsConfidence = "Media";
 
   // EVALUAR RESULTADO REAL PARA PARTIDOS FINALIZADOS (FEEDBACK LOOP)
-  const isFinal = game.status?.abstractGameState === "Final" &&
-                  game.status?.detailedState !== "Postponed" &&
-                  game.status?.detailedState !== "Cancelled" &&
-                  game.status?.detailedState !== "Rescheduled";
-  let winnerOutcome = null;
-  let totalRunsOutcome = null;
-  let handicapOutcome = null;
-  let totalHitsOutcome = null;
 
-  if (isFinal) {
-    const actualAwayRuns = number(game.teams?.away?.score);
-    const actualHomeRuns = number(game.teams?.home?.score);
-    const actualAwayHits = number(game.linescore?.teams?.away?.hits || estimateHitsFromRuns(actualAwayRuns));
-    const actualHomeHits = number(game.linescore?.teams?.home?.hits || estimateHitsFromRuns(actualHomeRuns));
-    const actualTotalRuns = actualAwayRuns + actualHomeRuns;
-    const actualTotalHits = actualAwayHits + actualHomeHits;
-
-
-
-    // 1. Ganador
-    const realWinner = actualHomeRuns > actualAwayRuns ? homeName : awayName;
-    winnerOutcome = realWinner === favorite ? "HIT" : "MISS";
-
-    // 2. Total Carreras
-    const runLine = odds.overUnder || 8.5;
-    if (totalLean.includes("Over")) {
-      totalRunsOutcome = actualTotalRuns > runLine ? "HIT" : (actualTotalRuns === runLine ? "PUSH" : "MISS");
-    } else if (totalLean.includes("Under")) {
-      totalRunsOutcome = actualTotalRuns < runLine ? "HIT" : (actualTotalRuns === runLine ? "PUSH" : "MISS");
-    } else {
-      totalRunsOutcome = Math.abs(actualTotalRuns - runLine) <= 1.0 ? "HIT" : "MISS";
-    }
-
-    // 3. Hándicap (Run Line)
-    const hcMatch = runLinePick.match(/(.+)\s+([+-]\d+\.\d+)/);
-    if (hcMatch) {
-      const teamNameMatched = hcMatch[1].trim();
-      const hcVal = parseFloat(hcMatch[2]);
-      const teamIsHome = (teamNameMatched === homeName);
-      const runDiff = teamIsHome ? (actualHomeRuns - actualAwayRuns) : (actualAwayRuns - actualHomeRuns);
-      if (runDiff + hcVal > 0) handicapOutcome = "HIT";
-      else if (runDiff + hcVal < 0) handicapOutcome = "MISS";
-      else handicapOutcome = "PUSH";
-    }
-
-    // 4. Hits Totales
-    if (finalHitsLean.includes("Over")) {
-      totalHitsOutcome = actualTotalHits > 16.5 ? "HIT" : (actualTotalHits === 16.5 ? "PUSH" : "MISS");
-    } else if (finalHitsLean.includes("Under")) {
-      totalHitsOutcome = actualTotalHits < 16.5 ? "HIT" : (actualTotalHits === 16.5 ? "PUSH" : "MISS");
-    } else {
-      totalHitsOutcome = Math.abs(actualTotalHits - 16.5) <= 1.0 ? "HIT" : "MISS";
-    }
-  }
 
   const explanation = buildExplanation({
     awayName,
@@ -957,7 +904,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         estimate: `${Math.round(winProbability * 100)}%`,
         confidence,
         base: explanation[0] || `Carreras: ${awayName} ${round1(calibratedAwayRuns)} - ${homeName} ${round1(calibratedHomeRuns)}`,
-        outcome: winnerOutcome,
       },
       {
         market: "Total carreras",
@@ -967,7 +913,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         base: odds.overUnder
           ? `Línea de ESPN: ${odds.overUnder} (Prob del pick: ${Math.round(totalProb * 100)}% por solver ${finalPoisson.distribution.away === "NegativeBinomial" || finalPoisson.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"})`
           : `Total estimado: ${calibratedTotalRuns.toFixed(1)} (Prob del pick: ${Math.round(totalProb * 100)}% por solver ${finalPoisson.distribution.away === "NegativeBinomial" || finalPoisson.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"})`,
-        outcome: totalRunsOutcome,
       },
       {
         market: "Handicap",
@@ -975,7 +920,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         estimate: `Prob: ${Math.round(runLineProb * 100)}%`,
         confidence: handicapConfidence,
         base: `Diferencia proyectada de carreras: ${diff > 0 ? '+' : ''}${diff}. Calculado vía solver.`,
-        outcome: handicapOutcome,
       },
       {
         market: "Hits totales",
@@ -983,7 +927,6 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
         estimate: `${finalTotalHits.toFixed(1)} H`,
         confidence: finalHitsConfidence,
         base: `${awayName} ${round1(finalAwayHits)} H, ${homeName} ${round1(finalHomeHits)} H (Prob del pick: ${Math.round(finalHitsProb * 100)}% por solver ${hitsPoissonResult.distribution.away === "NegativeBinomial" || hitsPoissonResult.distribution.home === "NegativeBinomial" ? "NB" : "Poisson"} contra línea 16.5)`,
-        outcome: totalHitsOutcome,
       },
       ...(weather
         ? [
@@ -3301,18 +3244,10 @@ function renderResults(projection) {
   els.resultsBody.innerHTML = projection.rows
     .map(
       (row) => {
-        let outcomeBadge = "";
-        if (row.outcome === "HIT") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-850 dark:text-emerald-350">✓ ACERTADO</span>`;
-        } else if (row.outcome === "MISS") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-rose-100 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 px-2 py-0.5 text-xs font-bold text-rose-850 dark:text-rose-350">✗ FALLADO</span>`;
-        } else if (row.outcome === "PUSH") {
-          outcomeBadge = `<span class="ml-2 inline-flex items-center rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-800 dark:text-slate-200">⟷ DEVUELTO</span>`;
-        }
         return `
           <tr class="bg-white dark:bg-slate-900/20 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
             <td class="px-4 py-4 font-bold text-slate-900 dark:text-slate-100">${row.market}</td>
-            <td class="px-4 py-4 font-semibold text-emerald-850 dark:text-emerald-300">${row.pick}${outcomeBadge}</td>
+            <td class="px-4 py-4 font-semibold text-emerald-850 dark:text-emerald-300">${row.pick}</td>
             <td class="px-4 py-4 font-semibold text-slate-900 dark:text-slate-100">${row.estimate}</td>
             <td class="px-4 py-4">${confidenceBadge(row.confidence)}</td>
             <td class="px-4 py-4 text-slate-750 dark:text-slate-250">${row.base}</td>

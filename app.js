@@ -1,7 +1,5 @@
 const MLB_BASE = "https://statsapi.mlb.com/api/v1";
 const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard";
-const CALIBRATION_HISTORY_KEY = "mlb_model_history";
-const MAX_CALIBRATION_HISTORY = 240;
 const MAX_TEAM_CACHE = 40;
 const MAX_PITCHER_CACHE = 140;
 const MAX_RECENT_CONTEXT_CACHE = 90;
@@ -144,7 +142,6 @@ const state = {
   pitcherStats: new Map(),
   recentContexts: new Map(),
   weatherCache: new Map(),
-  isCalibrating: false,
   activeProjection: null,
   lineupStatusMap: new Map(),
   lineupPollTimer: null,
@@ -166,7 +163,6 @@ const els = {
   teamStatsGrid: document.querySelector("#teamStatsGrid"),
   resultsBody: document.querySelector("#resultsBody"),
   sourceBadge: document.querySelector("#sourceBadge"),
-  calibrationBadge: document.querySelector("#calibrationBadge"),
   lineupAutoBadge: document.querySelector("#lineupAutoBadge"),
   themeToggleBtn: document.querySelector("#themeToggleBtn"),
   themeToggleIcon: document.querySelector("#themeToggleIcon"),
@@ -190,7 +186,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   
   if (window.lucide) window.lucide.createIcons();
-  updateCalibrationBadge();
   loadSlate();
   scheduleMidnightReset();
 });
@@ -448,8 +443,6 @@ async function loadSlate() {
 
     const espnNote = state.espnEvents.length ? "ESPN conectado" : "ESPN sin respuesta";
     setStatus(`${state.games.length} partidos cargados. ${espnNote}.`, "ok");
-    const prevDate = addDays(date, -1);
-    runBackgroundCalibration([prevDate, date]);
     startLineupPolling();
   } catch (error) {
     stopLineupPolling();
@@ -593,12 +586,7 @@ async function compareSelectedGame() {
     renderLineups(projection);
     renderResults(projection);
     renderPredictor(projection);
-    const calInfo = obtenerCalibracion();
-    const calText = calInfo.totalGames > 0
-      ? ` | Auto-Ajuste: Carreras x${calInfo.runsBias.toFixed(2)}, Hits x${calInfo.hitsBias.toFixed(2)} (${calInfo.totalGames} G)`
-      : " | Auto-Ajuste: Neutro (Sin historial)";
-    els.sourceBadge.textContent = (espnPitchers.away || espnPitchers.home ? "MLB + ESPN pitchers" : "MLB") + calText;
-    updateCalibrationBadge();
+    els.sourceBadge.textContent = espnPitchers.away || espnPitchers.home ? "MLB + ESPN pitchers" : "MLB";
     setStatus("Comparación actualizada.", "ok");
   } catch (error) {
     setStatus(error.message || "No se pudo calcular la comparación.", "error");
@@ -711,16 +699,13 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awayRecentRuns = awayRecent?.games?.map(g => g.runsFor);
   const homeRecentRuns = homeRecent?.games?.map(g => g.runsFor);
 
-  // Cargar calibración automática (feedback loop)
-  const cal = obtenerCalibracion();
-
-  // Aplicar sesgos de calibración a las proyecciones base de carreras y hits
-  const calibratedAwayRuns = clamp(awayRuns * cal.runsBias, 2.0, 8.5);
-  const calibratedHomeRuns = clamp(homeRuns * cal.runsBias, 2.0, 8.5);
+  // Proyecciones base de carreras y hits
+  const calibratedAwayRuns = clamp(awayRuns, 2.0, 8.5);
+  const calibratedHomeRuns = clamp(homeRuns, 2.0, 8.5);
   const calibratedTotalRuns = calcularTotalCarreras(calibratedAwayRuns, calibratedHomeRuns);
 
-  const calibratedAwayHitsRaw = awayHits * cal.hitsBias;
-  const calibratedHomeHitsRaw = homeHits * cal.hitsBias;
+  const calibratedAwayHitsRaw = awayHits;
+  const calibratedHomeHitsRaw = homeHits;
 
   const probability = calcularProbabilidadGanador({
     awayRuns: calibratedAwayRuns,
@@ -849,19 +834,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     const actualTotalRuns = actualAwayRuns + actualHomeRuns;
     const actualTotalHits = actualAwayHits + actualHomeHits;
 
-    // Registrar en el feedback loop (utilizando las proyecciones BRUTAS para calcular sesgos estables)
-    guardarResultadoPartido(
-      game.gamePk,
-      game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now())),
-      awayRuns, // proyección de carreras original (uncalibrated)
-      homeRuns, // proyección de carreras original (uncalibrated)
-      actualAwayRuns,
-      actualHomeRuns,
-      awayHits, // proyección de hits original (uncalibrated)
-      homeHits, // proyección de hits original (uncalibrated)
-      actualAwayHits,
-      actualHomeHits
-    );
+
 
     // 1. Ganador
     const realWinner = actualHomeRuns > actualAwayRuns ? homeName : awayName;
@@ -4247,193 +4220,4 @@ function setLimitedMapValue(map, key, value, maxSize) {
   }
 }
 
-function compactCalibrationHistory(history) {
-  if (!Array.isArray(history)) return [];
 
-  const uniqueByGame = new Map();
-  history.forEach((item) => {
-    if (!item?.gamePk) return;
-    uniqueByGame.set(item.gamePk, item);
-  });
-
-  return [...uniqueByGame.values()]
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
-    .slice(-MAX_CALIBRATION_HISTORY);
-}
-
-function readCalibrationHistory() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(CALIBRATION_HISTORY_KEY) || "[]");
-    return compactCalibrationHistory(raw);
-  } catch {
-    return [];
-  }
-}
-
-function writeCalibrationHistory(history) {
-  try {
-    localStorage.setItem(CALIBRATION_HISTORY_KEY, JSON.stringify(compactCalibrationHistory(history)));
-  } catch (error) {
-    console.error("Error al guardar calibracion:", error);
-  }
-}
-
-function obtenerCalibracion() {
-  const history = readCalibrationHistory();
-  if (!history.length) {
-    return { runsBias: 1.0, hitsBias: 1.0, totalGames: 0 };
-  }
-
-  let sumProjRuns = 0;
-  let sumActRuns = 0;
-  let sumProjHits = 0;
-  let sumActHits = 0;
-  history.forEach((g) => {
-    sumProjRuns += numberOr(g.projAwayRuns, 0) + numberOr(g.projHomeRuns, 0);
-    sumActRuns += numberOr(g.actAwayRuns, 0) + numberOr(g.actHomeRuns, 0);
-    sumProjHits += numberOr(g.projAwayHits, 0) + numberOr(g.projHomeHits, 0);
-    sumActHits += numberOr(g.actAwayHits, 0) + numberOr(g.actHomeHits, 0);
-  });
-
-  const runsBias = sumProjRuns > 0 ? clamp(sumActRuns / sumProjRuns, 0.85, 1.15) : 1.0;
-  const hitsBias = sumProjHits > 0 ? clamp(sumActHits / sumProjHits, 0.85, 1.15) : 1.0;
-  return { runsBias, hitsBias, totalGames: history.length };
-}
-
-function guardarResultadoPartido(gamePk, date, projAwayRuns, projHomeRuns, actAwayRuns, actHomeRuns, projAwayHits, projHomeHits, actAwayHits, actHomeHits) {
-  const history = readCalibrationHistory();
-  if (history.some((g) => g.gamePk === gamePk)) return;
-
-  history.push({
-    gamePk,
-    date,
-    projAwayRuns,
-    projHomeRuns,
-    actAwayRuns,
-    actHomeRuns,
-    projAwayHits,
-    projHomeHits,
-    actAwayHits,
-    actHomeHits
-  });
-  writeCalibrationHistory(history);
-}
-
-function updateCalibrationBadge() {
-  if (!els.calibrationBadge) return;
-  const calInfo = obtenerCalibracion();
-  if (calInfo.totalGames > 0) {
-    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 text-xs font-bold text-emerald-800 dark:text-emerald-400 transition-all shadow-sm";
-    els.calibrationBadge.textContent = `Auto-Ajuste: Carreras x${calInfo.runsBias.toFixed(2)}, Hits x${calInfo.hitsBias.toFixed(2)} (${calInfo.totalGames} G)`;
-  } else {
-    els.calibrationBadge.className = "inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-600 dark:text-slate-400 transition-all shadow-sm";
-    els.calibrationBadge.textContent = "Auto-Ajuste: Neutro (Sin historial)";
-  }
-}
-
-function updateCalibrationBadgeStatus(text) {
-  if (!els.calibrationBadge) return;
-  els.calibrationBadge.className = "inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-xs font-bold text-amber-800 dark:text-amber-400 animate-pulse transition-all shadow-sm";
-  els.calibrationBadge.textContent = `Auto-Ajuste: ${text}`;
-}
-
-async function runBackgroundCalibration(dates) {
-  if (state.isCalibrating) return;
-  state.isCalibrating = true;
-  
-  updateCalibrationBadgeStatus("Buscando partidos...");
-
-  try {
-    const allFinishedGames = [];
-    const espnEventsMap = new Map(); // gamePk -> espnEvent
-
-    for (const date of dates) {
-      updateCalibrationBadgeStatus(`Consultando ${date}...`);
-      try {
-        const [mlbResult, espnResult] = await Promise.allSettled([
-          fetchJson(`${MLB_BASE}/schedule?sportId=1&date=${date}&hydrate=team,probablePitcher,linescore`),
-          fetchJson(`${ESPN_SCOREBOARD}?dates=${date.replaceAll("-", "")}`),
-        ]);
-
-        if (mlbResult.status === "fulfilled") {
-          const games = mlbResult.value?.dates?.[0]?.games || [];
-          const espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
-          
-          const finishedGames = games.filter(g => g.status?.abstractGameState === "Final" &&
-                                                  g.status?.detailedState !== "Postponed" &&
-                                                  g.status?.detailedState !== "Cancelled" &&
-                                                  g.status?.detailedState !== "Rescheduled");
-          
-          finishedGames.forEach(game => {
-            const espnEvent = findEspnEvent(game, espnEvents);
-            if (espnEvent) {
-              espnEventsMap.set(game.gamePk, espnEvent);
-            }
-            allFinishedGames.push(game);
-          });
-        }
-      } catch (err) {
-        console.warn(`No se pudieron obtener partidos para la fecha ${date}:`, err);
-      }
-    }
-
-    const history = readCalibrationHistory();
-    const uncalibratedGames = allFinishedGames.filter(g => !history.some(h => h.gamePk === g.gamePk));
-
-    if (uncalibratedGames.length === 0) {
-      updateCalibrationBadge();
-      state.isCalibrating = false;
-      return;
-    }
-
-    let count = 0;
-    for (const game of uncalibratedGames) {
-      count++;
-      updateCalibrationBadgeStatus(`Calibrando ${count}/${uncalibratedGames.length}...`);
-      
-      const away = game.teams.away.team;
-      const home = game.teams.home.team;
-      const season = String(game.season || new Date(game.gameDate || Date.now()).getFullYear());
-      const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate || Date.now()));
-      const espnEvent = espnEventsMap.get(game.gamePk) || null;
-
-      try {
-        const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent] = await Promise.all([
-          getTeamStats(away.id),
-          getTeamStats(home.id),
-          getPitcherStats(game.teams.away.probablePitcher?.id, season),
-          getPitcherStats(game.teams.home.probablePitcher?.id, season),
-          getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id),
-          getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id),
-        ]);
-
-        const espnPitchers = extractEspnPitchers(espnEvent);
-        const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
-        const homePitcher = mergePitcherSources(espnPitchers.home, homeMlbPitcher, game.teams.home.probablePitcher);
-
-        buildProjection({
-          game,
-          awayStats,
-          homeStats,
-          awayPitcher,
-          homePitcher,
-          awayRecent,
-          homeRecent,
-          espnEvent,
-        });
-
-        // Retraso de 150ms para no sobrecargar el servidor
-        await new Promise(resolve => setTimeout(resolve, 150));
-      } catch (err) {
-        console.error(`Error al calibrar partido ${game.gamePk}:`, err);
-      }
-    }
-
-    updateCalibrationBadge();
-  } catch (err) {
-    console.error("Error en la calibración de segundo plano:", err);
-    updateCalibrationBadge();
-  } finally {
-    state.isCalibrating = false;
-  }
-}

@@ -340,9 +340,11 @@ async function checkAllLineups() {
     renderGames();
 
     if (newlyConfirmedGame) {
-      if (state.activeProjection && state.activeProjection.lineupSource === "Ninguno") {
-        setStatus(`¡Alineación confirmada detectada (${newlyConfirmedGame.source}) para ${newlyConfirmedGame.game.teams.away.team.name} vs ${newlyConfirmedGame.game.teams.home.team.name}! Actualizando proyecciones...`, "ok");
+      if (state.activeProjection) {
+        setStatus(`¡Alineación oficial confirmada (${newlyConfirmedGame.source}) para ${newlyConfirmedGame.game.teams.away.team.name} vs ${newlyConfirmedGame.game.teams.home.team.name}! Recalculando al instante...`, "ok");
         compareSelectedGame();
+      } else {
+        setStatus(`¡Alineación oficial confirmada (${newlyConfirmedGame.source}) para ${newlyConfirmedGame.game.teams.away.team.name} vs ${newlyConfirmedGame.game.teams.home.team.name}!`, "ok");
       }
     }
   } catch (err) {
@@ -579,6 +581,20 @@ async function compareSelectedGame() {
 
     state.activeProjection = projection;
 
+    if (lineupSource !== "Ninguno") {
+      const prevStatus = state.lineupStatusMap.get(game.gamePk);
+      if (!prevStatus?.hasLineup) {
+        state.lineupStatusMap.set(game.gamePk, {
+          gamePk: game.gamePk,
+          hasLineup: true,
+          source: lineupSource,
+          lastChecked: Date.now(),
+        });
+        updateLineupAutoBadge("ok");
+        renderGames();
+      }
+    }
+
     renderSummary(projection);
     renderPitchers(projection);
     renderTeamStats(projection);
@@ -587,7 +603,7 @@ async function compareSelectedGame() {
     renderResults(projection);
     renderPredictor(projection);
     els.sourceBadge.textContent = espnPitchers.away || espnPitchers.home ? "MLB + ESPN pitchers" : "MLB";
-    setStatus("Comparación actualizada.", "ok");
+    setStatus(`Comparación actualizada (Alineación ${lineupSource === "Ninguno" ? "estimada" : "confirmada via " + lineupSource}).`, "ok");
   } catch (error) {
     setStatus(error.message || "No se pudo calcular la comparación.", "error");
   } finally {

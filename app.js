@@ -676,11 +676,12 @@ async function compareSelectedGame() {
       }
     }
 
+    renderMatchupHeader(game, projection);
     renderSummary(projection);
     renderPitchers(projection);
+    renderLineups(projection);
     renderTeamStats(projection);
     renderBullpens(projection);
-    renderLineups(projection);
     renderResults(projection);
     renderPredictor(projection);
     generateGeminiSummary(projection);
@@ -1133,13 +1134,25 @@ function calcularOfensivaEquipo(team = {}, opponentHand = "R", last10Metrics = n
 
 function calcularFormaReciente(context = {}) {
   const last10 = context?.last10 || {};
+  const rawGames = context?.games || last10.rawGames || [];
+  const gamesList = Array.isArray(rawGames) ? rawGames.slice(-10) : [];
+  const sequence = gamesList.map((g) => ((g.win ?? (g.runsFor > g.runsAllowed)) ? "W" : "L"));
+
+  const games10 = gamesList.length || numberOr(last10.games, 0);
+  const wins10 = gamesList.length
+    ? gamesList.filter((g) => (g.win ?? (g.runsFor > g.runsAllowed))).length
+    : numberOr(last10.wins, 0);
+  const losses10 = games10 - wins10;
+
   const metrics = {
-    games10: numberOr(last10.games, 0),
-    wins10: numberOr(last10.wins, 0),
-    runsFor10: fallback(last10.runsForPerGame, LEAGUE.runsPerGame),
-    runsAllowed10: fallback(last10.runsAllowedPerGame, LEAGUE.runsPerGame),
-    hits10: fallback(last10.hitsPerGame, LEAGUE.hitsPerGame),
-    hitsAllowed10: fallback(last10.hitsAllowedPerGame, LEAGUE.hitsPerGame),
+    games10,
+    wins10,
+    losses10,
+    sequence,
+    runsFor10: fallback(last10.runsForPerGame, average(gamesList.map((g) => g.runsFor)) || LEAGUE.runsPerGame),
+    runsAllowed10: fallback(last10.runsAllowedPerGame, average(gamesList.map((g) => g.runsAllowed)) || LEAGUE.runsPerGame),
+    hits10: fallback(last10.hitsPerGame, average(gamesList.map((g) => g.hits)) || LEAGUE.hitsPerGame),
+    hitsAllowed10: fallback(last10.hitsAllowedPerGame, average(gamesList.map((g) => g.opponentHits)) || LEAGUE.hitsPerGame),
     overRate: Number.isFinite(last10.overRate) ? last10.overRate : 0.5,
   };
   const winRate10 = metrics.games10 ? metrics.wins10 / metrics.games10 : 0.5;
@@ -2426,7 +2439,57 @@ function renderGames() {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function renderMatchupHeader(game) {
+function buildFormBadgeSequence(sequence = [], formScore = null) {
+  if (!sequence || !sequence.length) {
+    if (Number.isFinite(formScore)) {
+      const pct = (formScore * 100).toFixed(1);
+      return `
+        <div class="mt-1.5 flex flex-col items-center">
+          <div class="inline-flex items-center gap-1 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+            <span>${pct}</span>
+            <span class="text-[9px] uppercase tracking-wider font-semibold opacity-90">Forma Promedio</span>
+          </div>
+        </div>
+      `;
+    }
+    return "";
+  }
+
+  const badgeElements = sequence.map((res) => {
+    const isWin = res === "W" || res === true;
+    const bg = isWin
+      ? "bg-emerald-500 text-white font-black"
+      : "bg-rose-500 text-white font-black";
+    const label = isWin ? "W" : "L";
+    return `<span class="inline-flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded ${bg} text-[9px] sm:text-[10px] font-bold leading-none shadow-xs shrink-0" title="${isWin ? 'Victoria' : 'Derrota'}">${label}</span>`;
+  }).join("");
+
+  let scoreHtml = "";
+  if (Number.isFinite(formScore)) {
+    const pct = (formScore * 100).toFixed(1);
+    const scoreTone = formScore >= 0.55
+      ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
+      : formScore <= 0.45
+        ? "bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800"
+        : "bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800";
+
+    scoreHtml = `
+      <div class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${scoreTone}">
+        <span>${pct}</span>
+        <span class="text-[9px] uppercase tracking-wider font-semibold opacity-90">Forma Promedio</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mt-2 flex flex-col items-center gap-1">
+      ${scoreHtml}
+      <div class="flex items-center justify-center gap-0.5 sm:gap-1 flex-wrap mt-0.5 max-w-[180px] sm:max-w-[210px]">${badgeElements}</div>
+    </div>
+  `;
+}
+
+function renderMatchupHeader(game, projection = null) {
   if (!game) {
     els.matchupHeader.innerHTML = `
       <div class="text-center py-4">
@@ -2473,6 +2536,13 @@ function renderMatchupHeader(game) {
 
   const time = game.gameDate ? formatTime(game.gameDate) : "";
 
+  // Form Badges if active projection available
+  const proj = projection || (state.activeProjection?.game?.gamePk === game.gamePk ? state.activeProjection : null);
+  const awayForm = proj?.model?.awayForm;
+  const homeForm = proj?.model?.homeForm;
+  const awayFormHtml = buildFormBadgeSequence(awayForm?.sequence, awayForm?.score);
+  const homeFormHtml = buildFormBadgeSequence(homeForm?.sequence, homeForm?.score);
+
   // Render metadata on the top row
   if (els.matchupMetadata) {
     els.matchupMetadata.innerHTML = `
@@ -2493,24 +2563,26 @@ function renderMatchupHeader(game) {
 
   // Render full matchups on the bottom row (below the button/metadata)
   els.matchupHeader.innerHTML = `
-    <div class="flex items-center justify-center gap-6 sm:gap-12 w-full py-2 relative z-10">
+    <div class="flex items-center justify-center gap-4 sm:gap-10 w-full py-2 relative z-10">
       <!-- Away Team -->
-      <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
+      <div class="flex flex-col items-center text-center max-w-[170px] sm:max-w-[220px]">
         <img src="${awayLogo}" alt="${away}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
         <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-900 dark:text-white tracking-wider">${escapeHtml(away)}</span>
         <span class="mt-0.5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-bold">${escapeHtml(awayRecord)}</span>
+        ${awayFormHtml}
       </div>
       
       <!-- @ Circle -->
-      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900">
+      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 self-center">
         <span class="text-xs font-bold text-slate-600 dark:text-slate-300">@</span>
       </div>
       
       <!-- Home Team -->
-      <div class="flex flex-col items-center text-center max-w-[160px] sm:max-w-[200px]">
+      <div class="flex flex-col items-center text-center max-w-[170px] sm:max-w-[220px]">
         <img src="${homeLogo}" alt="${home}" class="h-12 w-12 sm:h-14 sm:w-14 object-contain img-smooth" onerror="this.style.display='none'" />
         <span class="mt-2 text-sm sm:text-base font-black uppercase text-slate-900 dark:text-white tracking-wider">${escapeHtml(home)}</span>
         <span class="mt-0.5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-bold">${escapeHtml(homeRecord)}</span>
+        ${homeFormHtml}
       </div>
     </div>
   `;
@@ -2882,42 +2954,42 @@ function renderTeamStats(projection) {
   const awayLast10 = projection.awayLast10Metrics;
   const homeLast10 = projection.homeLast10Metrics;
 
+  const awayForm = projection.model?.awayForm;
+  const homeForm = projection.model?.homeForm;
+
   els.teamStatsGrid.innerHTML = `
     <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800 gap-1">
+      <div class="px-4 pt-4 pb-3 flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 gap-1">
         <div class="flex items-center gap-2">
           <i data-lucide="bar-chart-2" class="h-4 w-4 text-emerald-600 dark:text-emerald-400"></i>
-          <h3 class="text-base font-black text-slate-900 dark:text-white">Estadísticas por Equipo (Comparativa)</h3>
+          <h3 class="text-base font-black text-slate-900 dark:text-white">Estadísticas por Equipo</h3>
         </div>
-        <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">General vs Split vs Últimos 10 Juegos</span>
+        <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Comparativa compacta: General · Splits · Últimos 10 Juegos</span>
       </div>
 
-      <div class="p-4 grid gap-5 grid-cols-1 lg:grid-cols-3">
-        <!-- 1. General (Temporada) -->
-        <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 p-3">
-          <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
-            <span class="text-xs font-extrabold uppercase tracking-wide text-slate-700 dark:text-slate-300">General (Temporada)</span>
-            <span class="text-[10px] font-bold text-slate-500">162 G Target</span>
+      <div class="p-4 flex flex-col gap-5">
+        <!-- 1. GENERAL (TEMPORADA) -->
+        <div>
+          <div class="flex items-center justify-between mb-2 px-1">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-slate-700 dark:text-slate-300">1. Temporada General (162 G Target)</span>
           </div>
-          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayOverall, homeOverall)}
+          ${renderCompactTeamTable(awayName, homeName, awayLogo, homeLogo, awayOverall, homeOverall, "general")}
         </div>
 
-        <!-- 2. Split (Local / Visitante) -->
-        <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 p-3">
-          <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
-            <span class="text-xs font-extrabold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Split (Visitante / Local)</span>
-            <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Por Condición</span>
+        <!-- 2. SPLIT POR SEDE -->
+        <div>
+          <div class="flex items-center justify-between mb-2 px-1">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">2. Split por Sede (Visitante vs Local)</span>
           </div>
-          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awaySplit, homeSplit)}
+          ${renderCompactTeamTable(awayName, homeName, awayLogo, homeLogo, awaySplit, homeSplit, "split")}
         </div>
 
-        <!-- 3. Últimos 10 Juegos -->
-        <div class="rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-950/10 p-3">
-          <div class="flex items-center justify-between pb-2 mb-2 border-b border-amber-200 dark:border-amber-900/50">
-            <span class="text-xs font-extrabold uppercase tracking-wide text-amber-800 dark:text-amber-300">Últimos 10 Juegos</span>
-            <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400">Forma Reciente</span>
+        <!-- 3. ÚLTIMOS 10 JUEGOS -->
+        <div>
+          <div class="flex items-center justify-between mb-2 px-1">
+            <span class="text-xs font-extrabold uppercase tracking-wide text-amber-800 dark:text-amber-300">3. Últimos 10 Juegos (Forma Reciente)</span>
           </div>
-          ${renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayLast10, homeLast10)}
+          ${renderCompactTeamTable(awayName, homeName, awayLogo, homeLogo, awayLast10, homeLast10, "last10", awayForm, homeForm)}
         </div>
       </div>
     </section>
@@ -2926,90 +2998,131 @@ function renderTeamStats(projection) {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function renderStatsComparisonTable(awayName, homeName, awayLogo, homeLogo, awayStats, homeStats) {
+function renderCompactTeamTable(awayName, homeName, awayLogo, homeLogo, awayStats, homeStats, type = "general", awayForm = null, homeForm = null) {
   const getNum = (val) => (Number.isFinite(val) && val !== null && val !== undefined ? val : null);
 
-  const awayRuns = getNum(awayStats?.runsPerGame ?? awayStats?.runsForPerGame);
-  const homeRuns = getNum(homeStats?.runsPerGame ?? homeStats?.runsForPerGame);
+  const runsA = getNum(awayStats?.runsPerGame ?? awayStats?.runsForPerGame);
+  const runsH = getNum(homeStats?.runsPerGame ?? homeStats?.runsForPerGame);
 
-  const awayRA = getNum(awayStats?.runsAllowedPerGame);
-  const homeRA = getNum(homeStats?.runsAllowedPerGame);
+  const raA = getNum(awayStats?.runsAllowedPerGame);
+  const raH = getNum(homeStats?.runsAllowedPerGame);
 
-  const awayDiff = getNum(awayStats?.diff ?? (awayRuns !== null && awayRA !== null ? awayRuns - awayRA : null));
-  const homeDiff = getNum(homeStats?.diff ?? (homeRuns !== null && homeRA !== null ? homeRuns - homeRA : null));
+  const diffA = getNum(awayStats?.diff ?? (runsA !== null && raA !== null ? runsA - raA : null));
+  const diffH = getNum(homeStats?.diff ?? (runsH !== null && raH !== null ? runsH - raH : null));
 
-  const awayHR = awayStats && Number.isFinite(awayStats.homeRunsTotal) ? awayStats.homeRunsTotal : (awayStats && Number.isFinite(awayStats.homeRunsPerGame) ? Math.round(awayStats.homeRunsPerGame * (awayStats.games || 10)) : null);
-  const homeHR = homeStats && Number.isFinite(homeStats.homeRunsTotal) ? homeStats.homeRunsTotal : (homeStats && Number.isFinite(homeStats.homeRunsPerGame) ? Math.round(homeStats.homeRunsPerGame * (homeStats.games || 10)) : null);
+  const hrA = awayStats && Number.isFinite(awayStats.homeRunsTotal) ? awayStats.homeRunsTotal : (awayStats && Number.isFinite(awayStats.homeRunsPerGame) ? Math.round(awayStats.homeRunsPerGame * (awayStats.games || 10)) : null);
+  const hrH = homeStats && Number.isFinite(homeStats.homeRunsTotal) ? homeStats.homeRunsTotal : (homeStats && Number.isFinite(homeStats.homeRunsPerGame) ? Math.round(homeStats.homeRunsPerGame * (homeStats.games || 10)) : null);
 
-  const awayHRPct = awayStats && Number.isFinite(awayStats.hrPct) ? `${awayStats.hrPct.toFixed(1)}%` : "N/D";
-  const homeHRPct = homeStats && Number.isFinite(homeStats.hrPct) ? `${homeStats.hrPct.toFixed(1)}%` : "N/D";
+  const hrPctA = getNum(awayStats?.hrPct);
+  const hrPctH = getNum(homeStats?.hrPct);
 
-  const awaySLG = awayStats && Number.isFinite(awayStats.slg) ? awayStats.slg.toFixed(2) : "N/D";
-  const homeSLG = homeStats && Number.isFinite(homeStats.slg) ? homeStats.slg.toFixed(2) : "N/D";
+  const slgA = getNum(awayStats?.slg);
+  const slgH = getNum(homeStats?.slg);
 
-  const awayLOB = awayStats && Number.isFinite(awayStats.lobPct) ? `${awayStats.lobPct.toFixed(1)}%` : "N/D";
-  const homeLOB = homeStats && Number.isFinite(homeStats.lobPct) ? `${homeStats.lobPct.toFixed(1)}%` : "N/D";
+  const lobA = getNum(awayStats?.lobPct);
+  const lobH = getNum(homeStats?.lobPct);
 
-  const awayBB = awayStats && Number.isFinite(awayStats.bbPct) ? `${awayStats.bbPct.toFixed(1)}%` : "N/D";
-  const homeBB = homeStats && Number.isFinite(homeStats.bbPct) ? `${homeStats.bbPct.toFixed(1)}%` : "N/D";
+  const bbA = getNum(awayStats?.bbPct);
+  const bbH = getNum(homeStats?.bbPct);
 
-  const rows = [
-    { label: "Runs / G", awayVal: awayRuns !== null ? awayRuns.toFixed(2) : "N/D", homeVal: homeRuns !== null ? homeRuns.toFixed(2) : "N/D", isHigherBetter: true, rawA: awayRuns, rawH: homeRuns },
-    { label: "RA / G", awayVal: awayRA !== null ? awayRA.toFixed(2) : "N/D", homeVal: homeRA !== null ? homeRA.toFixed(2) : "N/D", isHigherBetter: false, rawA: awayRA, rawH: homeRA },
-    { label: "Diff", awayVal: awayDiff !== null ? formatSigned(awayDiff) : "N/D", homeVal: homeDiff !== null ? formatSigned(homeDiff) : "N/D", isHigherBetter: true, rawA: awayDiff, rawH: homeDiff },
-    { label: "Homeruns", awayVal: awayHR !== null ? awayHR : "N/D", homeVal: homeHR !== null ? homeHR : "N/D", isHigherBetter: true, rawA: awayHR, rawH: homeHR },
-    { label: "HR %", awayVal: awayHRPct, homeVal: homeHRPct, isHigherBetter: true, rawA: awayStats?.hrPct, rawH: homeStats?.hrPct },
-    { label: "SLG", awayVal: awaySLG, homeVal: homeSLG, isHigherBetter: true, rawA: awayStats?.slg, rawH: homeStats?.slg },
-    { label: "LOB %", awayVal: awayLOB, homeVal: homeLOB, isHigherBetter: true, rawA: awayStats?.lobPct, rawH: homeStats?.lobPct },
-    { label: "BB %", awayVal: awayBB, homeVal: homeBB, isHigherBetter: true, rawA: awayStats?.bbPct, rawH: homeStats?.bbPct },
-  ];
+  const highlight = (valA, valH, isHigherBetter) => {
+    if (!Number.isFinite(valA) || !Number.isFinite(valH) || valA === valH) {
+      return { classA: "text-slate-800 dark:text-slate-100", classH: "text-slate-800 dark:text-slate-100" };
+    }
+    const isAwayBetter = isHigherBetter ? valA > valH : valA < valH;
+    return {
+      classA: isAwayBetter ? "font-black text-emerald-600 dark:text-emerald-400" : "text-slate-700 dark:text-slate-300",
+      classH: !isAwayBetter ? "font-black text-emerald-600 dark:text-emerald-400" : "text-slate-700 dark:text-slate-300",
+    };
+  };
+
+  const hRuns = highlight(runsA, runsH, true);
+  const hRa = highlight(raA, raH, false);
+  const hDiff = highlight(diffA, diffH, true);
+  const hHr = highlight(hrA, hrH, true);
+  const hHrPct = highlight(hrPctA, hrPctH, true);
+  const hSlg = highlight(slgA, slgH, true);
+  const hLob = highlight(lobA, lobH, true);
+  const hBb = highlight(bbA, bbH, true);
+
+  // Sequences and W-L for Last 10
+  const winsA = awayForm?.wins10 ?? awayStats?.wins ?? 0;
+  const lossesA = awayForm?.losses10 ?? awayStats?.losses ?? 0;
+  const winsH = homeForm?.wins10 ?? homeStats?.wins ?? 0;
+  const lossesH = homeForm?.losses10 ?? homeStats?.losses ?? 0;
+
+  const seqA = awayForm?.sequence || [];
+  const seqH = homeForm?.sequence || [];
+
+  const renderBadges = (seq) => {
+    if (!seq || !seq.length) return "-";
+    return seq.map(res => `<span class="inline-flex h-4 w-4 items-center justify-center rounded ${res === 'W' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'} text-[9px] font-black leading-none shrink-0" title="${res === 'W' ? 'Victoria' : 'Derrota'}">${res}</span>`).join("");
+  };
+
+  const isLast10 = type === "last10";
+  const isSplit = type === "split";
 
   return `
-    <table class="w-full text-xs">
-      <thead>
-        <tr class="text-[11px] text-slate-500 dark:text-slate-400 border-b border-slate-200/60 dark:border-slate-800">
-          <th class="py-1 text-left font-bold truncate max-w-[75px]">Stats</th>
-          <th class="py-1 text-center font-bold">
-            <div class="flex items-center justify-center gap-1">
-              <img src="${awayLogo}" class="w-3.5 h-3.5 object-contain img-smooth" alt="" />
-              <span class="truncate max-w-[70px]">${awayName}</span>
-            </div>
-          </th>
-          <th class="py-1 text-center font-bold">
-            <div class="flex items-center justify-center gap-1">
-              <img src="${homeLogo}" class="w-3.5 h-3.5 object-contain img-smooth" alt="" />
-              <span class="truncate max-w-[70px]">${homeName}</span>
-            </div>
-          </th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60 font-semibold">
-        ${rows.map(r => {
-          const numA = r.rawA !== undefined ? r.rawA : parseFloat(r.awayVal);
-          const numH = r.rawH !== undefined ? r.rawH : parseFloat(r.homeVal);
-          let aClass = "text-slate-700 dark:text-slate-200";
-          let hClass = "text-slate-700 dark:text-slate-200";
+    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+      <table class="w-full min-w-[700px] text-left text-xs">
+        <thead class="bg-slate-50 dark:bg-slate-900/80 text-[11px] font-black uppercase tracking-wide text-slate-850 dark:text-slate-200 border-b border-slate-200 dark:border-slate-800 whitespace-nowrap">
+          <tr>
+            <th class="px-3 py-2 text-left whitespace-nowrap">Equipo</th>
+            ${isLast10 ? `<th class="px-3 py-2 text-center whitespace-nowrap min-w-[55px]">W-L</th><th class="px-3 py-2 text-center whitespace-nowrap">Racha (L10)</th>` : ""}
+            ${isSplit ? `<th class="px-3 py-2 text-center whitespace-nowrap">Condición</th>` : ""}
+            <th class="px-3 py-2 text-center whitespace-nowrap">Runs/G</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">RA/G</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">Diff</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">HR</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">HR %</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">SLG</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">LOB %</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">BB %</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+          <!-- Away Team Row -->
+          <tr class="odd:bg-white dark:odd:bg-slate-900/20 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
+            <td class="px-3 py-2 font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+              <div class="flex items-center gap-2">
+                <img src="${awayLogo}" class="w-4 h-4 object-contain img-smooth" alt="" />
+                <span>${escapeHtml(awayName)}</span>
+              </div>
+            </td>
+            ${isLast10 ? `<td class="px-3 py-2 text-center font-bold whitespace-nowrap ${winsA > winsH ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-100'}">${winsA}-${lossesA}</td><td class="px-3 py-2 text-center whitespace-nowrap"><div class="flex items-center justify-center gap-0.5">${renderBadges(seqA)}</div></td>` : ""}
+            ${isSplit ? `<td class="px-3 py-2 text-center text-slate-500 dark:text-slate-400 font-semibold whitespace-nowrap">Visitante</td>` : ""}
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hRuns.classA}">${runsA !== null ? runsA.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hRa.classA}">${raA !== null ? raA.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hDiff.classA}">${diffA !== null ? formatSigned(diffA) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hHr.classA}">${hrA !== null ? hrA : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hHrPct.classA}">${hrPctA !== null ? `${hrPctA.toFixed(1)}%` : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hSlg.classA}">${slgA !== null ? slgA.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hLob.classA}">${lobA !== null ? `${lobA.toFixed(1)}%` : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hBb.classA}">${bbA !== null ? `${bbA.toFixed(1)}%` : "N/D"}</td>
+          </tr>
 
-          if (Number.isFinite(numA) && Number.isFinite(numH) && numA !== numH) {
-            if (r.isHigherBetter) {
-              if (numA > numH) aClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
-              else hClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
-            } else {
-              if (numA < numH) aClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
-              else hClass = "text-emerald-600 dark:text-emerald-400 font-extrabold";
-            }
-          }
-
-          return `
-            <tr>
-              <td class="py-1 text-slate-500 dark:text-slate-400 font-medium">${r.label}</td>
-              <td class="py-1 text-center ${aClass}">${r.awayVal ?? "N/D"}</td>
-              <td class="py-1 text-center ${hClass}">${r.homeVal ?? "N/D"}</td>
-            </tr>
-          `;
-        }).join('')}
-      </tbody>
-    </table>
+          <!-- Home Team Row -->
+          <tr class="even:bg-slate-50 dark:even:bg-slate-900/40 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
+            <td class="px-3 py-2 font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+              <div class="flex items-center gap-2">
+                <img src="${homeLogo}" class="w-4 h-4 object-contain img-smooth" alt="" />
+                <span>${escapeHtml(homeName)}</span>
+              </div>
+            </td>
+            ${isLast10 ? `<td class="px-3 py-2 text-center font-bold whitespace-nowrap ${winsH > winsA ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-100'}">${winsH}-${lossesH}</td><td class="px-3 py-2 text-center whitespace-nowrap"><div class="flex items-center justify-center gap-0.5">${renderBadges(seqH)}</div></td>` : ""}
+            ${isSplit ? `<td class="px-3 py-2 text-center text-slate-500 dark:text-slate-400 font-semibold whitespace-nowrap">Local</td>` : ""}
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hRuns.classH}">${runsH !== null ? runsH.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hRa.classH}">${raH !== null ? raH.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hDiff.classH}">${diffH !== null ? formatSigned(diffH) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hHr.classH}">${hrH !== null ? hrH : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hHrPct.classH}">${hrPctH !== null ? `${hrPctH.toFixed(1)}%` : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hSlg.classH}">${slgH !== null ? slgH.toFixed(2) : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hLob.classH}">${lobH !== null ? `${lobH.toFixed(1)}%` : "N/D"}</td>
+            <td class="px-3 py-2 text-center whitespace-nowrap ${hBb.classH}">${bbH !== null ? `${bbH.toFixed(1)}%` : "N/D"}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -3108,33 +3221,28 @@ function renderBullpens(projection) {
     `;
   }
 
-  const bullpenSection = document.createElement("section");
-  bullpenSection.id = "bullpenSection";
-  bullpenSection.className = "overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark";
-  bullpenSection.innerHTML = `
-    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800">
-      <div class="flex items-center gap-2">
-        <h3 class="text-sm font-black uppercase tracking-wide text-slate-900 dark:text-white">Bullpens</h3>
-        <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">Temporada ${new Date().getFullYear()}</span>
-      </div>
-      <div class="flex items-center gap-1 text-[10px] font-bold text-slate-500 dark:text-slate-400">
-        <span class="inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 text-[9px] font-black text-amber-800 dark:text-amber-300">CL</span> Closer
-        <span class="mx-1.5 text-slate-300 dark:text-slate-700">·</span>
-        <span class="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 px-1.5 py-0.5 text-[9px] font-black text-emerald-800 dark:text-emerald-300">SU</span> Setup
-      </div>
-    </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-100 dark:divide-slate-800">
-      ${bullpenTable(awayRelievers, awayName, awayLogo, "away")}
-      ${bullpenTable(homeRelievers, homeName, homeLogo, "home")}
-    </div>
-  `;
-
-  // Insert right after the pitcherGrid section
-  const existingBullpen = document.getElementById("bullpenSection");
-  if (existingBullpen) {
-    existingBullpen.replaceWith(bullpenSection);
-  } else {
-    els.pitcherGrid.insertAdjacentElement("afterend", bullpenSection);
+  const target = document.getElementById("bullpenSection");
+  if (target) {
+    target.innerHTML = `
+      <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <h3 class="text-sm font-black uppercase tracking-wide text-slate-900 dark:text-white">Bullpens</h3>
+            <span class="rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">Temporada ${new Date().getFullYear()}</span>
+          </div>
+          <div class="flex items-center gap-1 text-[10px] font-bold text-slate-500 dark:text-slate-400">
+            <span class="inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 text-[9px] font-black text-amber-800 dark:text-amber-300">CL</span> Closer
+            <span class="mx-1.5 text-slate-300 dark:text-slate-700">·</span>
+            <span class="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 px-1.5 py-0.5 text-[9px] font-black text-emerald-800 dark:text-emerald-300">SU</span> Setup
+          </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-100 dark:divide-slate-800">
+          ${bullpenTable(awayRelievers, awayName, awayLogo, "away")}
+          ${bullpenTable(homeRelievers, homeName, homeLogo, "home")}
+        </div>
+      </section>
+    `;
+    return;
   }
 }
 

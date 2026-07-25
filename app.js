@@ -4348,7 +4348,7 @@ async function fetchOrSynthesizeAiSummary(projection, apiKey) {
     try {
       const prompt = `Analiza el siguiente partido de béisbol MLB en español y devuelve ÚNICAMENTE un JSON válido con esta estructura exacta sin explicaciones adicionales:
 {
-  "introduccionPartido": "Resumen narrativo en 2 párrafos introduciendo el duelo entre ${awayName} y ${homeName} en el ${venue}, racha reciente, abridores (${awayPitcher} vs ${homePitcher}) y concluyendo con: 'Nuestro modelo proyecta una victoria ${winner === homeName ? 'local' : 'visitante'} para ${winner} por ${winner === homeName ? `${roundedHome}-${roundedAway}` : `${roundedAway}-${roundedHome}`}'.",
+  "introduccionPartido": "Resumen narrativo periodístico en 2 párrafos 100% ÚNICO, dinámico y fluido introduciendo el duelo entre ${awayName} y ${homeName} en el ${venue}, analizando el contraste de los abridores (${awayPitcher} vs ${homePitcher}), clima y momento reciente, concluyendo con: 'Nuestro modelo proyecta una victoria ${winner === homeName ? 'local' : 'visitante'} para ${winner} por ${winner === homeName ? `${roundedHome}-${roundedAway}` : `${roundedAway}-${roundedHome}`}'. Evita usar plantillas o frases idénticas a otros partidos.",
   "overUnderText": "Análisis del mercado Over/Under ${totalEstimate} carreras y probabilidad de bateo.",
   "first5Text": "Proyección y dinamismo para las primeras 5 entradas (1st 5 Innings).",
   "secondHalfText": "Impacto de relevistas y tramo final del partido.",
@@ -4391,19 +4391,139 @@ Datos detallados del partido:
     }
   }
 
+  // Generadores Dinámicos Únicos por Partido
+  const introduccionDinamica = generarIntroduccionDinamica({
+    awayName, homeName, venue, awayPitcher, homePitcher, awayPitcherEra, homePitcherEra,
+    totalEstimate, winner, roundedAway, roundedHome, windDirStr, tempStr
+  });
+
+  const overUnderDinamico = generarOverUnderDinamico(projection);
+  const pitchingMatchupDinamico = generarPitchingMatchupDinamico(projection);
+  const fatigaDinamica = generarFatigaDinamica(projection);
+  const climaDinamico = generarClimaDinamico(projection);
+
   // Fallback: Síntesis Estadística de alta precisión
   const synthetic = {
-    introduccionPartido: `${awayName} y ${homeName} se enfrentan en la jornada de la MLB en el ${venue}. Ambos equipos llegan a este compromiso evaluando sus rotaciones tras sus compromisos recientes. En la lomita se miden ${awayPitcher} (ERA ${awayPitcherEra}) frente a ${homePitcher} (ERA ${homePitcherEra}), en un duelo donde las aperturas tempranas dictarán el ritmo ofensivo. Nuestro modelo proyecta una victoria ${winner === homeName ? 'local' : 'visitante'} para ${winner} por ${winner === homeName ? `${roundedHome}-${roundedAway}` : `${roundedAway}-${roundedHome}`}.`,
-    overUnderText: `El total estimado por el modelo se ubica en ${totalEstimate} carreras. Las tendencias numéricas y los porcentajes de contacto indican una línea de ${overUnderPick} con alta volatilidad en los primeros episodios.`,
-    first5Text: `Primeras 5 entradas (1st 5 Innings) — Se proyecta un inicio con buen ritmo de batazos. La efectividad de ${awayPitcher} y ${homePitcher} contra el primer tercio del orden al bate será clave para evitar anotaciones tempranas.`,
-    secondHalfText: `Segunda mitad (Entradas 6-9) — El desgaste del bullpen proyecta oportunidades de carreras tarde en el encuentro, especialmente si los abridores superan los 85 picheos.`,
-    pitchingMatchupText: `Duelo de lanzadores: ${awayPitcher} (ERA ${awayPitcherEra}) muestra métricas sólidas pero enfrenta un orden de bateo oponente con buen OBP. Por su parte, ${homePitcher} (ERA ${homePitcherEra}) buscará inducir batazos por el suelo en el ${venue}.`,
-    fatigueText: `Fatiga & Descanso: Bullpens con carga de trabajo moderada en los últimos 3 días. Los abridores llegan con 4+ días de descanso regular, optimizando su velocidad inicial de bola rápida.`,
-    weatherParkText: `Factor Clima Open-Meteo: Temperatura de ${tempStr}, humedad controlada y viento de ${windSpeedStr} (${windDirStr}). Estas condiciones climáticas en el ${venue} ${windDirStr.includes("favor") || windDirStr.includes("Outfield") ? "favorecen el vuelo de la pelota y la producción de jonrones" : "ayudan a contener los elevados al outfield"}.`,
-    predictionAngle: `Ángulo de Apuesta Principal: Predicción enfocada en ${overUnderPick} y ventaja para ${winner} (${winner === homeName ? `${homeRuns}` : `${awayRuns}`} carreras estimadas). Se sugiere seguir la línea en vivo tras la confirmación total de alineaciones.`
+    introduccionPartido: introduccionDinamica,
+    overUnderText: overUnderDinamico,
+    first5Text: `Primeras 5 entradas (1st 5 Innings) — Se proyecta un inicio disputado. La efectividad de ${awayPitcher} y ${homePitcher} contra el primer tercio del orden al bate dictará las carreras tempranas.`,
+    secondHalfText: `Segunda mitad (Entradas 6-9) — El desgaste del bullpen proyecta oportunidades de carreras en el tramo final si los abridores superan los 85 picheos.`,
+    pitchingMatchupText: pitchingMatchupDinamico,
+    fatigueText: fatigaDinamica,
+    weatherParkText: climaDinamico,
+    predictionAngle: `Ángulo de Apuesta Principal: Predicción enfocada en ${overUnderPick} y ventaja para ${winner} (${winner === homeName ? `${homeRuns}` : `${awayRuns}`} carreras estimadas). Se sugiere monitorear cambios tras la alineación oficial.`
   };
 
   return { summary: synthetic, source: "Síntesis Estadística Estructurada" };
+}
+
+function generarOverUnderDinamico(projection) {
+  const totalNum = parseFloat(projection.model?.totalRuns) || 8.5;
+  const awayRuns = projection.model?.awayRuns != null ? projection.model.awayRuns.toFixed(1) : "4.0";
+  const homeRuns = projection.model?.homeRuns != null ? projection.model.homeRuns.toFixed(1) : "4.5";
+  const pick = totalNum > 8.5 ? "Over 8.5 carreras" : "Under 8.5 carreras";
+
+  if (totalNum >= 9.5) {
+    return `Alta expectativa de carreraje: El modelo calcula un total proyectado de ${totalNum.toFixed(1)} carreras (${projection.awayName} ${awayRuns} - ${projection.homeName} ${homeRuns}). La combinación de porcentaje de contacto y factores del estadio respalda una tendencia hacia el ${pick}.`;
+  }
+  if (totalNum <= 7.8) {
+    return `Baja expectativa de carreraje: La proyección del modelo apunta a un duelo defensivo apretado de ${totalNum.toFixed(1)} carreras totales. El control del picheo abridor sugiere una línea sólida hacia el ${pick}.`;
+  }
+  return `Línea equilibrada en ${totalNum.toFixed(1)} carreras estimadas. El análisis de OBP colectivo y efectividad de lanzadores indica inclinación hacia el ${pick} con margen moderado.`;
+}
+
+function generarPitchingMatchupDinamico(projection) {
+  const awayP = projection.pitchers?.away?.name || projection.game?.teams?.away?.probablePitcher?.fullName || "Abridor Visitante";
+  const homeP = projection.pitchers?.home?.name || projection.game?.teams?.home?.probablePitcher?.fullName || "Abridor Local";
+  const eraA = projection.model?.awayPitcherMetrics?.era;
+  const eraH = projection.model?.homePitcherMetrics?.era;
+  const whipA = projection.model?.awayPitcherMetrics?.whip;
+  const whipH = projection.model?.homePitcherMetrics?.whip;
+  const venue = projection.game?.venue?.name || "Estadio MLB";
+
+  const eraAStr = Number.isFinite(eraA) ? eraA.toFixed(2) : "N/D";
+  const eraHStr = Number.isFinite(eraH) ? eraH.toFixed(2) : "N/D";
+  const whipAStr = Number.isFinite(whipA) ? whipA.toFixed(2) : "N/D";
+  const whipHStr = Number.isFinite(whipH) ? whipH.toFixed(2) : "N/D";
+
+  if (Number.isFinite(eraA) && Number.isFinite(eraH) && Math.abs(eraA - eraH) >= 1.0) {
+    const dominant = eraA < eraH ? awayP : homeP;
+    const domEra = eraA < eraH ? eraAStr : eraHStr;
+    const challenger = eraA < eraH ? homeP : awayP;
+    const chalEra = eraA < eraH ? eraHStr : eraAStr;
+    return `Contraste en la lomita: ${dominant} (ERA ${domEra}, WHIP ${eraA < eraH ? whipAStr : whipHStr}) muestra una ventaja métrica clara frente a ${challenger} (ERA ${chalEra}), quien enfrentará la exigencia de contener el orden al bate rival en el ${venue}.`;
+  }
+
+  return `Duelo parejo en el picheo abridor: ${awayP} (ERA ${eraAStr}, WHIP ${whipAStr}) busca neutralizar la ofensiva rival, mientras que ${homeP} (ERA ${eraHStr}, WHIP ${whipHStr}) defenderá la lomita local apoyándose en su control de zona de strike.`;
+}
+
+function generarFatigaDinamica(projection) {
+  const awayName = projection.awayName || "Visitante";
+  const homeName = projection.homeName || "Local";
+  const awayRelievers = projection.awayBullpenRoster || [];
+  const homeRelievers = projection.homeBullpenRoster || [];
+
+  const totalRelievers = awayRelievers.length + homeRelievers.length;
+  if (totalRelievers > 10) {
+    return `Reserva de bullpen amplia: ${awayName} cuenta con ${awayRelievers.length} relevistas disponibles y ${homeName} con ${homeRelievers.length}. Los abridores llegan con días de descanso regular, permitiendo una rotación de picheo saludable.`;
+  }
+  return `Gestión de relevistas: Bullpens con carga de trabajo regular. Las entradas finales dependerán de la durabilidad de los abridores y la disponibilidad de los closers para cerrar el encuentro.`;
+}
+
+function generarClimaDinamico(projection) {
+  const weather = projection.weather;
+  const venue = projection.game?.venue?.name || "Estadio MLB";
+  if (!weather) {
+    return `Condiciones climáticas estándar para el juego en el ${venue}. Sin impactos significativos previstos en el vuelo de la pelota.`;
+  }
+
+  const tempStr = weather.temperature != null ? `${weather.temperature}°C` : "20°C";
+  const windStr = weather.windSpeed != null ? `${weather.windSpeed} km/h` : "10 km/h";
+  const windDir = weather.windDirectionLabel || "Viento moderado";
+
+  if (windDir.includes("favor") || windDir.includes("Outfield")) {
+    return `Factor Clima en ${venue}: Temperatura de ${tempStr} con viento a favor (${windStr}, ${windDir}). Esta condición meteorológica beneficia a los bateadores y favorece el incremento de batazos profundos al outfield.`;
+  }
+  if (windDir.includes("contra") || windDir.includes("Infield")) {
+    return `Factor Clima en ${venue}: Temperatura de ${tempStr} y viento en contra (${windStr}, ${windDir}). El viento frenará los batazos elevados, ayudando a los jardineros y favoreciendo al picheo abridor.`;
+  }
+  return `Factor Clima en ${venue}: Temperatura agradable de ${tempStr} y viento cruzado de ${windStr} (${windDir}). Condiciones neutras que permiten un desarrollo normal del partido.`;
+}
+
+function generarIntroduccionDinamica(ctx) {
+  const { awayName, homeName, venue, awayPitcher, homePitcher, awayPitcherEra, homePitcherEra, totalEstimate, winner, roundedAway, roundedHome, windDirStr, tempStr } = ctx;
+  const isHomeWinner = winner === homeName;
+  const scoreStr = isHomeWinner ? `${roundedHome}-${roundedAway}` : `${roundedAway}-${roundedHome}`;
+  const winnerSideStr = isHomeWinner ? `local para ${homeName}` : `visitante para ${awayName}`;
+  const totalNum = parseFloat(totalEstimate) || 8.5;
+  const eraA = parseFloat(awayPitcherEra);
+  const eraH = parseFloat(homePitcherEra);
+
+  // Variante 1: Duelo de Pitcheo Dominante (Bajo ERA en ambos lanzadores)
+  if (Number.isFinite(eraA) && Number.isFinite(eraH) && eraA <= 3.60 && eraH <= 3.60) {
+    return `Un auténtico duelo de ases se vislumbra en el ${venue}, donde ${awayPitcher} (${awayPitcherEra} ERA) y ${homePitcher} (${homePitcherEra} ERA) saltan a la lomita con la encomienda de maniatar a las maderas enemigas desde el primer lanzamiento. Ambas rotaciones exhiben métricas de control envidiables, lo que augura un juego decidido por detalles finos en las entradas intermedias. Nuestro modelo prevé un choque de bajo carreraje y proyecta una victoria ${winnerSideStr} por marcador de ${scoreStr}.`;
+  }
+
+  // Variante 2: Juego de Alto Vuelo / Bateo Encendido / Viento a Favor
+  if (totalNum >= 9.0 || windDirStr.includes("Outfield") || windDirStr.includes("favor")) {
+    return `Las condiciones climáticas y el potencial ofensivo en el ${venue} anticipan un encuentro de alta velocidad y dinamismo con el madero. Con una temperatura de ${tempStr} y el viento soplando a favor de los bateadores, tanto ${awayName} como ${homeName} buscarán capitalizar desde temprano sobre el picheo abridor (${awayPitcher} vs ${homePitcher}). El modelo proyecta una jornada prolífica en bases y batazos de poder, apuntando a una victoria ${winnerSideStr} con resultado estimado de ${scoreStr}.`;
+  }
+
+  // Variante 3: Ventaja de Abridor Específico (Un pitcher es claramente superior)
+  if (Number.isFinite(eraA) && Number.isFinite(eraH) && Math.abs(eraA - eraH) >= 1.20) {
+    const dominantPitcher = eraA < eraH ? awayPitcher : homePitcher;
+    const dominantTeam = eraA < eraH ? awayName : homeName;
+    const challengerPitcher = eraA < eraH ? homePitcher : awayPitcher;
+    return `La brecha de efectividad en el picheo abridor emerge como la clave táctica principal en el ${venue}. ${dominantPitcher} llega respaldado por métricas superiores para comandar el picheo de ${dominantTeam}, mientras que ${challengerPitcher} enfrenta la exigencia de contener un orden al bate oponente agresivo. Basado en este contraste en la lomita, nuestro modelo proyecta un triunfo ${winnerSideStr} por ${scoreStr}.`;
+  }
+
+  // Variante 4: Desafío Táctico y Bateo Oportuno
+  if (totalNum <= 7.8) {
+    return `La jornada en el ${venue} plantea una prueba de paciencia e inteligencia en las bases entre ${awayName} y ${homeName}. Con ${awayPitcher} y ${homePitcher} enfocados en inducir batazos de out al cuadro, la capacidad de fabricar carreras en momentos apretados y castigar al bullpen rival será determinante. El modelo anticipa un encuentro cerrado y otorga la ventaja ${winnerSideStr} por ${scoreStr}.`;
+  }
+
+  // Variante 5: Narrativa Balanceada
+  return `El choque entre ${awayName} y ${homeName} en el ${venue} promete emociones intensas sobre el terreno de juego. El abridor visitante ${awayPitcher} (${awayPitcherEra} ERA) intentará imponer condiciones temprano frente al abridor de casa ${homePitcher} (${homePitcherEra} ERA), en un compromiso donde el manejo del bullpen y el bateo oportuno dictarán el desenlace. Tras procesar las métricas de la jornada, nuestro modelo pronostica una victoria ${winnerSideStr} por marcador de ${scoreStr}.`;
 }
 
 function renderAiSummaryCard(projection, summary, sourceTag) {

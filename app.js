@@ -4317,11 +4317,11 @@ async function fetchOrSynthesizeAiSummary(projection, apiKey) {
   const awayName = projection.awayName || "Visitante";
   const homeName = projection.homeName || "Local";
   const venue = projection.game?.venue?.name || "Estadio MLB";
-  const awayRuns = projection.model?.awayRuns != null ? projection.model.awayRuns.toFixed(1) : "4.0";
-  const homeRuns = projection.model?.homeRuns != null ? projection.model.homeRuns.toFixed(1) : "4.5";
-  const roundedAway = Math.round(projection.model?.awayRuns || 4);
-  const roundedHome = Math.round(projection.model?.homeRuns || 5);
-  const winner = projection.model?.awayWinProbability > projection.model?.homeWinProbability ? awayName : homeName;
+  const awayRuns = Number.isFinite(projection.awayRuns) ? projection.awayRuns.toFixed(1) : (projection.model?.awayRuns != null ? projection.model.awayRuns.toFixed(1) : "4.0");
+  const homeRuns = Number.isFinite(projection.homeRuns) ? projection.homeRuns.toFixed(1) : (projection.model?.homeRuns != null ? projection.model.homeRuns.toFixed(1) : "4.5");
+  const roundedAway = Math.max(1, Math.round(projection.awayRuns ?? projection.model?.awayRuns ?? 4));
+  const roundedHome = Math.max(1, Math.round(projection.homeRuns ?? projection.model?.homeRuns ?? 5));
+  const winner = projection.favorite || (projection.awayRuns >= projection.homeRuns ? awayName : homeName);
   
   const weather = projection.weather;
   const tempStr = weather?.temperature != null ? `${weather.temperature}°C` : "22°C";
@@ -4333,8 +4333,8 @@ async function fetchOrSynthesizeAiSummary(projection, apiKey) {
   const awayPitcherEra = projection.model?.awayPitcherMetrics?.era != null ? projection.model.awayPitcherMetrics.era.toFixed(2) : "N/D";
   const homePitcherEra = projection.model?.homePitcherMetrics?.era != null ? projection.model.homePitcherMetrics.era.toFixed(2) : "N/D";
 
-  const totalEstimate = projection.model?.totalRuns != null ? projection.model.totalRuns.toFixed(1) : "8.5";
-  const overUnderPick = Number(totalEstimate) > 8.5 ? "Over 8.5 carreras" : "Under 8.5 carreras";
+  const totalEstimate = Number.isFinite(projection.totalRuns) ? projection.totalRuns.toFixed(1) : (projection.model?.totalRuns != null ? projection.model.totalRuns.toFixed(1) : "8.5");
+  const overUnderPick = projection.totalLean || (Number(totalEstimate) > 8.5 ? "Over 8.5 carreras" : "Under 8.5 carreras");
 
   const awayLineupDetails = projection.awayLineup && projection.awayLineup.length > 0
     ? projection.awayLineup.map((h, i) => `${i + 1}. ${h.name} (${h.position || "D"}, OBP:${h.obp != null ? h.obp.toFixed(3) : ".300"})`).join("; ")
@@ -4418,10 +4418,10 @@ Datos detallados del partido:
 }
 
 function generarOverUnderDinamico(projection) {
-  const totalNum = parseFloat(projection.model?.totalRuns) || 8.5;
-  const awayRuns = projection.model?.awayRuns != null ? projection.model.awayRuns.toFixed(1) : "4.0";
-  const homeRuns = projection.model?.homeRuns != null ? projection.model.homeRuns.toFixed(1) : "4.5";
-  const pick = totalNum > 8.5 ? "Over 8.5 carreras" : "Under 8.5 carreras";
+  const totalNum = Number.isFinite(projection.totalRuns) ? projection.totalRuns : (parseFloat(projection.model?.totalRuns) || 8.5);
+  const awayRuns = Number.isFinite(projection.awayRuns) ? projection.awayRuns.toFixed(1) : (projection.model?.awayRuns != null ? projection.model.awayRuns.toFixed(1) : "4.0");
+  const homeRuns = Number.isFinite(projection.homeRuns) ? projection.homeRuns.toFixed(1) : (projection.model?.homeRuns != null ? projection.model.homeRuns.toFixed(1) : "4.5");
+  const pick = projection.totalLean || (totalNum > 8.5 ? "Over 8.5 carreras" : "Under 8.5 carreras");
 
   if (totalNum >= 9.5) {
     return `Alta expectativa de carreraje: El modelo calcula un total proyectado de ${totalNum.toFixed(1)} carreras (${projection.awayName} ${awayRuns} - ${projection.homeName} ${homeRuns}). La combinación de porcentaje de contacto y factores del estadio respalda una tendencia hacia el ${pick}.`;
@@ -4532,8 +4532,8 @@ function renderAiSummaryCard(projection, summary, sourceTag) {
 
   const awayName = projection.awayName || "Visitante";
   const homeName = projection.homeName || "Local";
-  const winner = projection.model?.awayWinProbability > projection.model?.homeWinProbability ? awayName : homeName;
-  const confidence = projection.model?.confidence || "Media";
+  const winner = projection.favorite || (projection.awayRuns >= projection.homeRuns ? awayName : homeName);
+  const confidence = projection.confidence || projection.model?.confidence || "Media";
 
   container.innerHTML = `
     <section class="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-panel dark:shadow-panel-dark my-5">

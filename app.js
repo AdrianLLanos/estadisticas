@@ -680,8 +680,8 @@ async function compareSelectedGame() {
     renderSummary(projection);
     renderPitchers(projection);
     renderLineups(projection);
-    renderTeamStats(projection);
     renderBullpens(projection);
+    renderTeamStats(projection);
     renderResults(projection);
     renderPredictor(projection);
     generateGeminiSummary(projection);
@@ -1486,7 +1486,9 @@ async function fetchBullpenRoster(teamId, season, probablePitcherId) {
     const relievers = pitchers
       .filter((item) => {
         if (item.person?.id === probablePitcherId) return false;
-        const stat = item.person?.stats?.[0]?.splits?.[0]?.stat || {};
+        const personStats = item.person?.stats || [];
+        const pitchingGroup = personStats.find((s) => s.group?.displayName === "pitching") || personStats[0];
+        const stat = pitchingGroup?.splits?.[0]?.stat || {};
         const games = number(stat.gamesPlayed);
         const starts = number(stat.gamesStarted);
         // Include if 0 starts or starts are ≤45% of appearances → reliever
@@ -1494,7 +1496,9 @@ async function fetchBullpenRoster(teamId, season, probablePitcherId) {
       })
       .map((item) => {
         const person = item.person || {};
-        const stat = person.stats?.[0]?.splits?.[0]?.stat || {};
+        const personStats = person.stats || [];
+        const pitchingGroup = personStats.find((s) => s.group?.displayName === "pitching") || personStats[0];
+        const stat = pitchingGroup?.splits?.[0]?.stat || {};
         const innings = inningsToNumber(stat.inningsPitched);
         const earnedRuns = number(stat.earnedRuns);
         const era = innings > 0 ? (earnedRuns * 9) / innings : null;
@@ -3132,12 +3136,13 @@ function formatSigned(val) {
 }
 
 function renderBullpens(projection) {
+  const target = document.getElementById("bullpenSection");
+  if (!target) return;
+
   const awayTeam = projection.game.teams.away.team;
   const homeTeam = projection.game.teams.home.team;
   const awayRelievers = projection.awayBullpenRoster || [];
   const homeRelievers = projection.homeBullpenRoster || [];
-
-  if (!awayRelievers.length && !homeRelievers.length) return;
 
   const awayLogo = mlbTeamLogoUrl(awayTeam.id);
   const homeLogo = mlbTeamLogoUrl(homeTeam.id);
@@ -3221,9 +3226,7 @@ function renderBullpens(projection) {
     `;
   }
 
-  const target = document.getElementById("bullpenSection");
-  if (target) {
-    target.innerHTML = `
+  target.innerHTML = `
       <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-panel dark:shadow-panel-dark">
         <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800">
           <div class="flex items-center gap-2">
@@ -3242,9 +3245,8 @@ function renderBullpens(projection) {
         </div>
       </section>
     `;
-    return;
-  }
 }
+
 
 function renderLineups(projection) {
   const container = document.getElementById("lineupSection");
@@ -3471,7 +3473,7 @@ function clearResults(clearHeader = true) {
   els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-700 dark:text-slate-200">Aún no hay comparación.</td></tr>`;
   els.sourceBadge.textContent = "Sin datos";
   const existingBullpen = document.getElementById("bullpenSection");
-  if (existingBullpen) existingBullpen.remove();
+  if (existingBullpen) existingBullpen.innerHTML = "";
   
   const lineupSection = document.getElementById("lineupSection");
   if (lineupSection) {

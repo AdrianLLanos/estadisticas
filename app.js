@@ -1819,9 +1819,9 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
     // --- CÁLCULO MATEMÁTICO AVANZADO DE HITS Y BASES TOTALES (BINOMIAL + LOG5 + LINEUP PA) ---
     // 1. Turnos proyectados (PA) y Turnos Oficiales (AB) según puesto en lineup
     const lineupOrder = index + 1;
-    const paEst = lineupOrder <= 2 ? 4.7 : (lineupOrder <= 5 ? 4.4 : 3.8);
+    const expectedPA = lineupOrder <= 2 ? 4.7 : (lineupOrder <= 5 ? 4.4 : 3.8);
     const bbRate = Number.isFinite(stats.bbPct) ? stats.bbPct : 0.08;
-    const expectedAB = Math.max(3.0, paEst * (1 - bbRate));
+    const expectedAB = Math.max(3.0, expectedPA * (1 - bbRate));
 
     // 2. Promedio ponderado (70% temporada, 30% racha reciente en 14J)
     let effectiveAvg = Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage;

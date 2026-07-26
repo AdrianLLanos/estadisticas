@@ -2902,9 +2902,14 @@ function calcularBestBets(projection) {
     });
   }
 
-  // 2. Total Carreras (Over / Under) — con teamItems para diseño consistente
-  if (projection.totalLean && !projection.totalLean.includes("medio")) {
+  // 2. Total Carreras (Over / Under) — Siempre disponible para todos los partidos
+  if (projection.totalRuns != null) {
     const estimate = projection.totalRuns.toFixed(1);
+    const lineVal = projection.odds?.overUnder || 8.5;
+    let leanText = projection.totalLean;
+    if (!leanText || leanText.includes("medio") || leanText.includes("Cerca")) {
+      leanText = projection.totalRuns >= lineVal ? `Over ${lineVal}` : `Under ${lineVal}`;
+    }
     const awayR = projection.awayRuns ?? (projection.totalRuns / 2);
     const homeR = projection.homeRuns ?? (projection.totalRuns / 2);
     const totalProb = projection.totalConfidence === "Alta" ? 0.65 : (projection.totalConfidence === "Media" ? 0.58 : 0.53);
@@ -2917,13 +2922,13 @@ function calcularBestBets(projection) {
       tierBadge = "🛡️ Apuesta Segura";
       tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
     }
-    const awayRunPct = Math.round((awayR / (awayR + homeR)) * 100);
+    const awayRunPct = Math.round((awayR / (awayR + homeR || 1)) * 100);
     const homeRunPct = 100 - awayRunPct;
 
     candidateBets.push({
       category: "PARTIDO · CARRERAS",
-      title: `${projection.totalLean} Carreras`,
-      selection: `${projection.totalLean} (${estimate} est.)`,
+      title: `${leanText} Carreras`,
+      selection: `${leanText} (${estimate} est.)`,
       prob: totalProb,
       probPct: totalProbPct,
       tier,
@@ -2934,20 +2939,20 @@ function calcularBestBets(projection) {
         {
           icon: "✈️",
           teamName: awayName,
-          playerName: `${awayR} Carreras Est.`,
+          playerName: `${awayR.toFixed(1)} Carreras Est.`,
           betLine: `${awayRunPct}% ataque`,
           probPct: awayRunPct,
           barColor: "bg-gradient-to-r from-indigo-500 to-sky-400",
-          details: `<strong>${awayName}</strong> proyecta <strong>${awayR} carreras</strong> · Total: ${estimate} R`
+          details: `<strong>${awayName}</strong> proyecta <strong>${awayR.toFixed(1)} carreras</strong> · Total: ${estimate} R`
         },
         {
           icon: "🏠",
           teamName: homeName,
-          playerName: `${homeR} Carreras Est.`,
+          playerName: `${homeR.toFixed(1)} Carreras Est.`,
           betLine: `${homeRunPct}% ataque`,
           probPct: homeRunPct,
           barColor: "bg-gradient-to-r from-indigo-500 to-sky-400",
-          details: `<strong>${homeName}</strong> proyecta <strong>${homeR} carreras</strong> · ${projection.totalLean} ${projection.odds?.overUnder ?? estimate}`
+          details: `<strong>${homeName}</strong> proyecta <strong>${homeR.toFixed(1)} carreras</strong> · ${leanText} (${projection.odds?.overUnder ?? estimate} R)`
         }
       ],
       icon: "trending-up",
@@ -3126,7 +3131,7 @@ function calcularBestBets(projection) {
 
     candidateBets.push({
       category: "PITCHER · PONCHES (STRIKEOUTS)",
-      title: "Ponches de Pitcher Abridor Por Equipo",
+      title: "Ponches de Pitcher Abridor Por Jugador",
       selection: `Ponches (${pitcherItems.map(i => i.playerName).join(" / ")})`,
       prob: maxProb / 100,
       probPct: maxProb,
@@ -3235,7 +3240,7 @@ function calcularBestBets(projection) {
       const maxHrProb = Math.max(...hrItems.map(i => i.probPct));
       candidateBets.push({
         category: "BATEADOR · JONRONES",
-        title: "Jonrón Destacado Por Equipo",
+        title: "Jonrón Destacado Por Jugador",
         selection: `Over 0.5 HR (${hrItems.map(i => i.playerName).join(" / ")})`,
         prob: maxHrProb / 100,
         probPct: maxHrProb,
@@ -3309,7 +3314,7 @@ function calcularBestBets(projection) {
 
       candidateBets.push({
         category: "BATEADOR · HITS",
-        title: "Hits Totales Por Equipo",
+        title: "Hits Totales Por Jugador",
         selection: `Hits (${hitsItems.map(i => i.playerName).join(" / ")})`,
         prob: avgProb / 100,
         probPct: avgProb,
@@ -3388,7 +3393,7 @@ function calcularBestBets(projection) {
 
       candidateBets.push({
         category: "BATEADOR · BASES TOTALES",
-        title: "Bases Totales Destacadas Por Equipo",
+        title: "Bases Totales Destacadas Por Jugador",
         selection: `Bases Totales (${tbItems.map(i => i.playerName).join(" / ")})`,
         prob: avgProb / 100,
         probPct: avgProb,
@@ -3425,24 +3430,17 @@ function renderBestBets(projection) {
   const seguras = bets.filter(b => b.tier === "SEGURA");
 
   const renderBetCard = (bet) => {
-    const barWidth = `${bet.probPct}%`;
-    const barColor = bet.probPct >= 70
-      ? "bg-gradient-to-r from-emerald-500 to-teal-400"
-      : bet.probPct >= 60
-        ? "bg-gradient-to-r from-indigo-500 to-sky-400"
-        : "bg-gradient-to-r from-amber-500 to-yellow-400";
-
     const getRiskBadge = (pct) => {
       if (pct >= 70) {
-        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">🟢 Muy Segura</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase whitespace-nowrap bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">🟢 Muy Segura</span>`;
       }
       if (pct >= 60) {
-        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">🔵 Segura</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase whitespace-nowrap bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">🔵 Segura</span>`;
       }
       if (pct >= 50) {
-        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">🟡 Medio Arriesgada</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase whitespace-nowrap bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">🟡 Medio Arriesgada</span>`;
       }
-      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800">🔴 Arriesgada</span>`;
+      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase whitespace-nowrap bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800">🔴 Arriesgada</span>`;
     };
 
     const isSinglePickCard = bet.category.includes("GANADOR") || bet.category.includes("HANDICAP");
@@ -3452,16 +3450,16 @@ function renderBestBets(projection) {
         ${bet.teamItems.map(item => {
           const isSelectedPick = item.isPick || (item.playerName && item.playerName.includes("Pick"));
           
-          let boxClasses = "bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-800";
+          let boxClasses = "bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-800 min-w-0";
           let pickBadgeHtml = "";
 
           if (isSinglePickCard) {
             if (isSelectedPick) {
-              boxClasses = "bg-emerald-50/90 dark:bg-emerald-950/40 p-2.5 rounded-lg border-2 border-emerald-500 dark:border-emerald-600 shadow-sm";
-              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-black text-white uppercase tracking-wider font-mono">✅ PICK OFICIAL</span>`;
+              boxClasses = "bg-emerald-50/90 dark:bg-emerald-950/40 p-2.5 rounded-lg border-2 border-emerald-500 dark:border-emerald-600 shadow-sm min-w-0";
+              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white uppercase tracking-wider font-mono whitespace-nowrap">✅ PICK OFICIAL</span>`;
             } else {
-              boxClasses = "bg-slate-100/50 dark:bg-slate-900/40 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 opacity-60";
-              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-slate-200 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase font-mono">❌ LADO OPUESTO</span>`;
+              boxClasses = "bg-slate-100/50 dark:bg-slate-900/40 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 opacity-60 min-w-0";
+              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-bold text-slate-600 dark:text-slate-400 uppercase font-mono whitespace-nowrap">❌ LADO OPUESTO</span>`;
             }
           }
 
@@ -3469,39 +3467,37 @@ function renderBestBets(projection) {
 
           return `
             <div class="${boxClasses}">
-              <!-- Fila 1: Icono + Equipo (Izq) & Badge de Línea Over/Under (Der) -->
-              <div class="flex items-center justify-between gap-1">
-                <div class="flex items-center gap-1.5 font-mono text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase truncate">
+              <!-- Fila 1: Icono + Equipo (Izq) & Badges (Der) -->
+              <div class="flex items-center justify-between gap-1.5 flex-wrap mb-1">
+                <div class="flex items-center gap-1.5 font-mono text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase truncate min-w-0 max-w-[55%]">
                   <span class="text-sm leading-none shrink-0">${item.icon}</span>
                   <span class="truncate">${escapeHtml(item.teamName)}</span>
                 </div>
-                <div class="flex items-center gap-1">
+                <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
                   ${pickBadgeHtml}
-                  <span class="inline-flex items-center shrink-0 rounded bg-slate-200/80 dark:bg-slate-700/80 px-2 py-0.5 text-[10px] font-black text-slate-800 dark:text-slate-200 font-mono">
+                  <span class="inline-flex items-center shrink-0 rounded bg-slate-200/80 dark:bg-slate-700/80 px-2 py-0.5 text-[10px] font-black text-slate-800 dark:text-slate-200 font-mono whitespace-nowrap">
                     ${escapeHtml(item.betLine)}
                   </span>
                 </div>
               </div>
               
-              <!-- Fila 2: NOMBRE DEL JUGADOR / PICK (En su propia línea dedicada) -->
-              <div class="text-sm font-black text-slate-900 dark:text-white tracking-tight leading-snug">
+              <!-- Fila 2: NOMBRE DEL JUGADOR / PICK -->
+              <div class="text-sm font-black text-slate-900 dark:text-white tracking-tight leading-snug break-words">
                 ${escapeHtml(item.playerName)}
               </div>
 
               <!-- Fila 3: Detalles Estadísticos / Racha -->
-              <div class="text-[11px] font-semibold text-slate-600 dark:text-slate-350 leading-snug">
+              <div class="text-[11px] font-semibold text-slate-600 dark:text-slate-350 leading-snug mt-0.5 break-words">
                 ${item.details}
               </div>
 
-              <!-- Fila 4: Mini Barra de Porcentaje por Jugador -->
-              <div class="mt-0.5">
-                <div class="flex items-center justify-between text-[10px] font-bold mb-0.5">
-                  <div class="flex items-center gap-1.5">
-                    <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
-                    ${itemRiskBadge}
-                  </div>
-                  <span class="text-slate-900 dark:text-white font-mono font-black">${item.probPct}%</span>
+              <!-- Fila 4: Mini Barra de Porcentaje por Jugador / Opción -->
+              <div class="mt-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-700/50">
+                <div class="flex items-center justify-between text-[10px] font-bold mb-1">
+                  <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
+                  <span class="text-slate-900 dark:text-white font-mono font-black text-xs">${item.probPct}%</span>
                 </div>
+                ${itemRiskBadge ? `<div class="mb-1 flex items-center">${itemRiskBadge}</div>` : ''}
                 <div class="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
                   <div class="h-full rounded-full ${item.barColor} transition-all duration-500" style="width: ${item.probPct}%"></div>
                 </div>
@@ -3513,47 +3509,30 @@ function renderBestBets(projection) {
     ` : `<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium mb-3">${escapeHtml(bet.subText)}</p>`;
 
     return `
-      <div class="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-panel dark:shadow-panel-dark transition hover:border-emerald-500/50 flex flex-col">
+      <div class="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-panel dark:shadow-panel-dark transition hover:border-emerald-500/50 flex flex-col min-w-0">
         <!-- Contenido principal arriba -->
-        <div>
+        <div class="min-w-0">
           <!-- Cabecera: Categoría e Insignia de Seguridad -->
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono">${escapeHtml(bet.category)}</span>
-            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${bet.tierBg}">
+          <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono truncate">${escapeHtml(bet.category)}</span>
+            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider whitespace-nowrap ${bet.tierBg}">
               ${bet.tierBadge}
             </span>
           </div>
 
           <!-- Título de Selección -->
-          <h4 class="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-snug tracking-tight mb-2">
+          <h4 class="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-snug tracking-tight mb-2 break-words">
             ${escapeHtml(bet.title)}
           </h4>
 
           <!-- Etiqueta Métricas -->
-          <div class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-800 dark:text-slate-200 mb-3">
-            <i data-lucide="${bet.icon}" class="h-3.5 w-3.5 text-emerald-500"></i>
-            <span>${escapeHtml(bet.metricLabel)}</span>
+          <div class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-800 dark:text-slate-200 mb-3 max-w-full">
+            <i data-lucide="${bet.icon}" class="h-3.5 w-3.5 text-emerald-500 shrink-0"></i>
+            <span class="truncate">${escapeHtml(bet.metricLabel)}</span>
           </div>
 
           <!-- Razón Sabermétrica / Lista de Equipos -->
           ${teamListHtml}
-        </div>
-
-        <!-- Espaciador flexible: empuja la barra al fondo -->
-        <div class="flex-1"></div>
-
-        <!-- Barra de Probabilidad: siempre en el fondo de la tarjeta -->
-        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <div class="flex items-center justify-between text-xs font-black mb-1">
-            <div class="flex items-center gap-1.5">
-              <span class="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">Probabilidad Estimada</span>
-              ${getRiskBadge(bet.probPct)}
-            </div>
-            <span class="text-slate-900 dark:text-white">${bet.probPct}%</span>
-          </div>
-          <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-            <div class="h-full rounded-full ${barColor} transition-all duration-700" style="width: ${barWidth}"></div>
-          </div>
         </div>
       </div>
     `;

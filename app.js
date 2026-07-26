@@ -3043,6 +3043,19 @@ function calcularBestBets(projection) {
   }
 
   // 4. Ponches de Pitcher Abridor — Destacados por Equipo (1 Visitante ✈️ y 1 Local 🏠)
+  const isPitchingDuel = (projection.totalRuns ?? 8.5) < 7.8;
+  const awayEra = projection.model?.awayPitcherMetrics?.era ?? projection.pitchers?.away?.era ?? 4.0;
+  const homeEra = projection.model?.homePitcherMetrics?.era ?? projection.pitchers?.home?.era ?? 4.0;
+  const isAceDuel = (awayEra > 0 && awayEra < 3.50) && (homeEra > 0 && homeEra < 3.50);
+
+  const isAwayPitcherDominant = (projection.model?.awayPitcherMetrics?.era != null && projection.model.awayPitcherMetrics.era < 3.20) ||
+                                (projection.model?.awayPitcherMetrics?.whip != null && projection.model.awayPitcherMetrics.whip < 1.10) ||
+                                (projection.model?.awayPitcherMetrics?.k9 != null && projection.model.awayPitcherMetrics.k9 > 9.5);
+                                
+  const isHomePitcherDominant = (projection.model?.homePitcherMetrics?.era != null && projection.model.homePitcherMetrics.era < 3.20) ||
+                                (projection.model?.homePitcherMetrics?.whip != null && projection.model.homePitcherMetrics.whip < 1.10) ||
+                                (projection.model?.homePitcherMetrics?.k9 != null && projection.model.homePitcherMetrics.k9 > 9.5);
+
   const pitcherItems = [];
   [
     { p: awayPitcher, m: projection.model?.awayPitcherMetrics, teamName: awayName, icon: "✈️" },
@@ -3072,7 +3085,7 @@ function calcularBestBets(projection) {
     let tier = "VALOR";
     let tierBadge = "🎯 Ángulo de Valor";
     let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-    if (maxProb >= 67) {
+    if (maxProb >= 67 || isAceDuel || isPitchingDuel) {
       tier = "CANDADO";
       tierBadge = "👑 Candado Ponches";
       tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
@@ -3094,12 +3107,11 @@ function calcularBestBets(projection) {
       metricLabel: `Ponches Abridor (${awayName} vs ${homeName})`,
       teamItems: pitcherItems,
       icon: "activity",
-      order: 4
+      order: (isAceDuel || isPitchingDuel) ? 2.5 : 4
     });
   }
 
-  // 5. Props de Bateadores (Hits, Bases Totales, Jonrones) — Siempre disponibles para todos los partidos
-  // Si no hay lineup oficial/proyectado, generamos bateadores representativos desde los stats del equipo
+  // 5. Props de Bateadores (Hits, Bases Totales, Jonrones) — Siempre disponibles pero filtrados y penalizados en duelos de picheo
   const buildSyntheticHitters = (offenseMetrics, teamName, count = 9) => {
     const avg  = offenseMetrics?.battingAverage || offenseMetrics?.avg || LEAGUE.battingAverage;
     const obp  = offenseMetrics?.obp  || LEAGUE.obp;
@@ -3150,21 +3162,24 @@ function calcularBestBets(projection) {
 
   if (awayHitters.length > 0 || homeHitters.length > 0) {
 
-    // A) JONRÓN DE DESTACADO POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
-    const getBestHrHitter = (hitters) => {
+    // A) JONRÓN DE DESTACADO POR EQUIPO
+    const getBestHrHitter = (hitters, isOppDominant) => {
       if (!hitters || hitters.length === 0) return null;
       const candidates = hitters
-        .filter(h => h.hrProb >= 0.06 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.190)))
+        .filter(h => h.hrProb >= 0.06 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.200)))
+        .filter(h => !isOppDominant || (h.slg || 0) >= 0.460)
         .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
-      return candidates[0] || [...hitters].sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb))[0];
+      return candidates[0] || null;
     };
 
-    const awayTopHr = getBestHrHitter([...awayHitters]);
-    const homeTopHr = getBestHrHitter([...homeHitters]);
+    const awayTopHr = getBestHrHitter([...awayHitters], isHomePitcherDominant);
+    const homeTopHr = getBestHrHitter([...homeHitters], isAwayPitcherDominant);
 
     const createHrItem = (hitter, icon) => {
       if (!hitter) return null;
-      const pPct = Math.round(hitter.hrProb * 100);
+      let rawProb = hitter.hrProb;
+      if (isPitchingDuel) rawProb *= 0.70;
+      const pPct = Math.round(rawProb * 100);
       let streakStr = "";
       if (hitter.recentAvg != null) {
         const recentFormat = `.${Math.round(hitter.recentAvg * 1000)}`;
@@ -3185,7 +3200,7 @@ function calcularBestBets(projection) {
 
     const hrItems = [createHrItem(awayTopHr, "✈️"), createHrItem(homeTopHr, "🏠")].filter(Boolean);
 
-    if (hrItems.length > 0) {
+    if (hrItems.length > 0 && !isPitchingDuel) {
       const maxHrProb = Math.max(...hrItems.map(i => i.probPct));
       candidateBets.push({
         category: "BATEADOR · JONRONES",
@@ -3203,22 +3218,25 @@ function calcularBestBets(projection) {
       });
     }
 
-    // B) HITS DESTACADOS POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
-    const getBestHitsHitter = (hitters) => {
+    // B) HITS DESTACADOS POR EQUIPO (Con filtro de lanzador dominante y duelo de picheo)
+    const getBestHitsHitter = (hitters, isOppDominant) => {
       if (!hitters || hitters.length === 0) return null;
       return hitters
-        .filter(h => h.pHits1 >= 0.55)
-        .sort((a, b) => b.pHits1 - a.pHits1)[0] || [...hitters].sort((a, b) => b.pHits1 - a.pHits1)[0];
+        .filter(h => !h.isColdHitter && (h.recentAvg == null || h.recentAvg >= 0.200))
+        .filter(h => !isOppDominant || (h.avg || 0.250) >= 0.260)
+        .sort((a, b) => b.pHits1 - a.pHits1)[0] || null;
     };
 
-    const awayTopHits = getBestHitsHitter([...awayHitters]);
-    const homeTopHits = getBestHitsHitter([...homeHitters]);
+    const awayTopHits = getBestHitsHitter([...awayHitters], isHomePitcherDominant);
+    const homeTopHits = getBestHitsHitter([...homeHitters], isAwayPitcherDominant);
 
-    const createHitsItem = (hitter, icon) => {
+    const createHitsItem = (hitter, icon, isOppDominant) => {
       if (!hitter) return null;
       const isOver1_5 = hitter.projectedHits >= 1.35 || hitter.pHits2 >= 0.48;
       const lineText = isOver1_5 ? "Over 1.5 Hits" : "Over 0.5 Hits";
-      const prob = isOver1_5 ? hitter.pHits2 : hitter.pHits1;
+      let prob = isOver1_5 ? hitter.pHits2 : hitter.pHits1;
+      if (isPitchingDuel) prob *= 0.80;
+      if (isOppDominant) prob *= 0.85;
       const pPct = Math.round(prob * 100);
       const recentStr = hitter.recentAvg ? ` · ult 14J: .${Math.round(hitter.recentAvg * 1000)}` : "";
       return {
@@ -3232,18 +3250,21 @@ function calcularBestBets(projection) {
       };
     };
 
-    const hitsItems = [createHitsItem(awayTopHits, "✈️"), createHitsItem(homeTopHits, "🏠")].filter(Boolean);
+    const hitsItems = [
+      createHitsItem(awayTopHits, "✈️", isHomePitcherDominant),
+      createHitsItem(homeTopHits, "🏠", isAwayPitcherDominant)
+    ].filter(Boolean);
 
     if (hitsItems.length > 0) {
       const avgProb = Math.round(sum(hitsItems.map(i => i.probPct)) / hitsItems.length);
       let tier = "VALOR";
       let tierBadge = "🎯 Ángulo de Valor";
       let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (avgProb >= 70) {
+      if (avgProb >= 70 && !isPitchingDuel) {
         tier = "CANDADO";
         tierBadge = "👑 Candado de Hits";
         tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
-      } else if (avgProb >= 63) {
+      } else if (avgProb >= 63 && !isPitchingDuel) {
         tier = "SEGURA";
         tierBadge = "🛡️ Apuesta Segura";
         tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
@@ -3261,26 +3282,38 @@ function calcularBestBets(projection) {
         metricLabel: `Hits Est. (${awayName} vs ${homeName})`,
         teamItems: hitsItems,
         icon: "zap",
-        order: 5
+        order: isPitchingDuel ? 6 : 5
       });
     }
 
-    // C) BASES TOTALES DESTACADAS POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
-    const getBestTbHitter = (hitters) => {
+    // C) BASES TOTALES DESTACADAS POR EQUIPO (Con filtro estricto de Duelo de Picheo / Pitcher Dominante / Racha Fría)
+    const getBestTbHitter = (hitters, isOppDominant) => {
       if (!hitters || hitters.length === 0) return null;
-      return hitters
-        .filter(h => h.pTB1_5 >= 0.40 || h.projectedTB >= 1.2)
-        .sort((a, b) => b.pTB1_5 - a.pTB1_5)[0] || [...hitters].sort((a, b) => b.pTB1_5 - a.pTB1_5)[0];
+      // Regla 3: No sugerir 1+ TB para bateadores en rachas frías o contra lanzadores dominantes
+      const validHitters = hitters.filter(h => {
+        const isCold = h.isColdHitter || (h.recentAvg != null && h.recentAvg < 0.210);
+        if (isCold) return false;
+        if (isOppDominant && (h.slg || 0.400) < 0.440) return false;
+        return true;
+      });
+      const pool = validHitters.length > 0 ? validHitters : hitters.filter(h => !h.isColdHitter);
+      if (pool.length === 0) return null;
+      return pool.sort((a, b) => (b.pTB1_5 || b.projectedTB || 0) - (a.pTB1_5 || a.projectedTB || 0))[0] || null;
     };
 
-    const awayTopTb = getBestTbHitter([...awayHitters]);
-    const homeTopTb = getBestTbHitter([...homeHitters]);
+    const awayTopTb = getBestTbHitter([...awayHitters], isHomePitcherDominant);
+    const homeTopTb = getBestTbHitter([...homeHitters], isAwayPitcherDominant);
 
-    const createTbItem = (hitter, icon) => {
+    const createTbItem = (hitter, icon, isOppDominant) => {
       if (!hitter) return null;
       const isOver1_5 = hitter.pTB1_5 >= 0.48 || hitter.projectedTB >= 1.45;
       const lineText = isOver1_5 ? "Over 1.5 TB" : "Over 0.5 TB";
-      const pPct = Math.round((isOver1_5 ? hitter.pTB1_5 : clamp(1 - Math.exp(-hitter.projectedTB), 0.40, 0.90)) * 100);
+      let rawProb = isOver1_5 ? hitter.pTB1_5 : clamp(1 - Math.exp(-hitter.projectedTB), 0.40, 0.90);
+      // Regla 1: Si el total proyectado es menor a 7.8 (Duelo de Picheo), reduce drásticamente la confianza
+      if (isPitchingDuel) rawProb *= 0.70;
+      if (isOppDominant) rawProb *= 0.80;
+      const pPct = Math.round(rawProb * 100);
+      const note = isPitchingDuel ? " · ⚠️ Duelo de Picheo (<7.8 R)" : (isOppDominant ? " · ⚠️ Pitcher Dominante" : "");
       return {
         icon,
         teamName: hitter.teamName,
@@ -3288,18 +3321,26 @@ function calcularBestBets(projection) {
         betLine: lineText,
         probPct: pPct,
         barColor: pPct >= 60 ? "bg-gradient-to-r from-indigo-500 to-sky-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
-        details: `<strong>${lineText}</strong> (${hitter.projectedTB.toFixed(1)} TB Est.) · SLG .${Math.round((hitter.slg || 0.400) * 1000)}`
+        details: `<strong>${lineText}</strong> (${hitter.projectedTB.toFixed(1)} TB Est.) · SLG .${Math.round((hitter.slg || 0.400) * 1000)}${note}`
       };
     };
 
-    const tbItems = [createTbItem(awayTopTb, "✈️"), createTbItem(homeTopTb, "🏠")].filter(Boolean);
+    const tbItems = [
+      createTbItem(awayTopTb, "✈️", isHomePitcherDominant),
+      createTbItem(homeTopTb, "🏠", isAwayPitcherDominant)
+    ].filter(Boolean);
 
     if (tbItems.length > 0) {
       const avgProb = Math.round(sum(tbItems.map(i => i.probPct)) / tbItems.length);
       let tier = "VALOR";
       let tierBadge = "🎯 Ángulo de Valor";
       let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (avgProb >= 58) {
+      
+      if (isPitchingDuel || isAceDuel) {
+        tier = "PRECAUCIÓN";
+        tierBadge = "⚠️ Bajo en Duelo Picheo";
+        tierBg = "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700";
+      } else if (avgProb >= 58) {
         tier = "CANDADO";
         tierBadge = "👑 Candado Extrabase";
         tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
@@ -3321,7 +3362,7 @@ function calcularBestBets(projection) {
         metricLabel: `TB Est. (${awayName} vs ${homeName})`,
         teamItems: tbItems,
         icon: "flame",
-        order: 6
+        order: (isPitchingDuel || isAceDuel) ? 8 : 6
       });
     }
   }

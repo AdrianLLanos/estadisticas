@@ -2879,18 +2879,20 @@ function calcularBestBets(projection) {
         {
           icon: "✈️",
           teamName: awayName,
-          playerName: favTeam === awayName ? "⭐ Favorito" : "Visitante",
+          playerName: favTeam === awayName ? "⭐ Favorito (Pick)" : "Visitante",
           betLine: `${awayWinPct}% Win`,
           probPct: awayWinPct,
+          isPick: favTeam === awayName,
           barColor: awayWinPct >= 55 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
           details: `<strong>${awayName} Moneyline</strong> · Prob victoria: ${awayWinPct}%${awayFormStr}`
         },
         {
           icon: "🏠",
           teamName: homeName,
-          playerName: favTeam === homeName ? "⭐ Favorito" : "Local",
+          playerName: favTeam === homeName ? "⭐ Favorito (Pick)" : "Local",
           betLine: `${homeWinPct}% Win`,
           probPct: homeWinPct,
+          isPick: favTeam === homeName,
           barColor: homeWinPct >= 55 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
           details: `<strong>${homeName} Moneyline</strong> · Prob victoria: ${homeWinPct}%${homeFormStr}`
         }
@@ -3049,6 +3051,7 @@ function calcularBestBets(projection) {
           playerName: awayLabel,
           betLine: awayLine,
           probPct: awayProb,
+          isPick: awayIsPick,
           barColor: awayIsPick ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
           details: `<strong>${awayName} ${awayLine}</strong> · Diff proyectado: ${formatSigned(projection.diff)} · Prob: ${awayProb}%`
         },
@@ -3058,6 +3061,7 @@ function calcularBestBets(projection) {
           playerName: homeLabel,
           betLine: homeLine,
           probPct: homeProb,
+          isPick: homeIsPick,
           barColor: homeIsPick ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
           details: `<strong>${homeName} ${homeLine}</strong> · Diff proyectado: ${formatSigned(projection.diff)} · Prob: ${homeProb}%`
         }
@@ -3441,46 +3445,70 @@ function renderBestBets(projection) {
       return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800">🔴 Arriesgada</span>`;
     };
 
+    const isSinglePickCard = bet.category.includes("GANADOR") || bet.category.includes("HANDICAP");
+
     const teamListHtml = bet.teamItems ? `
       <div class="space-y-2 mb-3">
-        ${bet.teamItems.map(item => `
-          <div class="flex flex-col gap-1 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-800">
-            <!-- Fila 1: Icono + Equipo (Izq) & Badge de Línea Over/Under (Der) -->
-            <div class="flex items-center justify-between gap-1">
-              <div class="flex items-center gap-1.5 font-mono text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase truncate">
-                <span class="text-sm leading-none shrink-0">${item.icon}</span>
-                <span class="truncate">${escapeHtml(item.teamName)}</span>
-              </div>
-              <span class="inline-flex items-center shrink-0 rounded bg-slate-200/80 dark:bg-slate-700/80 px-2 py-0.5 text-[10px] font-black text-slate-800 dark:text-slate-200 font-mono">
-                ${escapeHtml(item.betLine)}
-              </span>
-            </div>
-            
-            <!-- Fila 2: NOMBRE DEL JUGADOR (En su propia línea dedicada, resaltado y grande) -->
-            <div class="text-sm font-black text-slate-900 dark:text-white tracking-tight leading-snug">
-              ${escapeHtml(item.playerName)}
-            </div>
+        ${bet.teamItems.map(item => {
+          const isSelectedPick = item.isPick || (item.playerName && item.playerName.includes("Pick"));
+          
+          let boxClasses = "bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-800";
+          let pickBadgeHtml = "";
 
-            <!-- Fila 3: Detalles Estadísticos / Racha -->
-            <div class="text-[11px] font-semibold text-slate-600 dark:text-slate-350 leading-snug">
-              ${item.details}
-            </div>
+          if (isSinglePickCard) {
+            if (isSelectedPick) {
+              boxClasses = "bg-emerald-50/90 dark:bg-emerald-950/40 p-2.5 rounded-lg border-2 border-emerald-500 dark:border-emerald-600 shadow-sm";
+              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-black text-white uppercase tracking-wider font-mono">✅ PICK OFICIAL</span>`;
+            } else {
+              boxClasses = "bg-slate-100/50 dark:bg-slate-900/40 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 opacity-60";
+              pickBadgeHtml = `<span class="inline-flex items-center shrink-0 rounded bg-slate-200 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase font-mono">❌ LADO OPUESTO</span>`;
+            }
+          }
 
-            <!-- Fila 4: Mini Barra de Porcentaje por Jugador -->
-            <div class="mt-0.5">
-              <div class="flex items-center justify-between text-[10px] font-bold mb-0.5">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
-                  ${getRiskBadge(item.probPct)}
+          const itemRiskBadge = (!isSinglePickCard || isSelectedPick) ? getRiskBadge(item.probPct) : "";
+
+          return `
+            <div class="${boxClasses}">
+              <!-- Fila 1: Icono + Equipo (Izq) & Badge de Línea Over/Under (Der) -->
+              <div class="flex items-center justify-between gap-1">
+                <div class="flex items-center gap-1.5 font-mono text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase truncate">
+                  <span class="text-sm leading-none shrink-0">${item.icon}</span>
+                  <span class="truncate">${escapeHtml(item.teamName)}</span>
                 </div>
-                <span class="text-slate-900 dark:text-white font-mono font-black">${item.probPct}%</span>
+                <div class="flex items-center gap-1">
+                  ${pickBadgeHtml}
+                  <span class="inline-flex items-center shrink-0 rounded bg-slate-200/80 dark:bg-slate-700/80 px-2 py-0.5 text-[10px] font-black text-slate-800 dark:text-slate-200 font-mono">
+                    ${escapeHtml(item.betLine)}
+                  </span>
+                </div>
               </div>
-              <div class="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-                <div class="h-full rounded-full ${item.barColor} transition-all duration-500" style="width: ${item.probPct}%"></div>
+              
+              <!-- Fila 2: NOMBRE DEL JUGADOR / PICK (En su propia línea dedicada) -->
+              <div class="text-sm font-black text-slate-900 dark:text-white tracking-tight leading-snug">
+                ${escapeHtml(item.playerName)}
+              </div>
+
+              <!-- Fila 3: Detalles Estadísticos / Racha -->
+              <div class="text-[11px] font-semibold text-slate-600 dark:text-slate-350 leading-snug">
+                ${item.details}
+              </div>
+
+              <!-- Fila 4: Mini Barra de Porcentaje por Jugador -->
+              <div class="mt-0.5">
+                <div class="flex items-center justify-between text-[10px] font-bold mb-0.5">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
+                    ${itemRiskBadge}
+                  </div>
+                  <span class="text-slate-900 dark:text-white font-mono font-black">${item.probPct}%</span>
+                </div>
+                <div class="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                  <div class="h-full rounded-full ${item.barColor} transition-all duration-500" style="width: ${item.probPct}%"></div>
+                </div>
               </div>
             </div>
-          </div>
-        `).join("")}
+          `;
+        }).join("")}
       </div>
     ` : `<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium mb-3">${escapeHtml(bet.subText)}</p>`;
 

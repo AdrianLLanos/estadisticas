@@ -2921,129 +2921,185 @@ function calcularBestBets(projection) {
     ((projection.awayLineup && projection.awayLineup.length > 0) || (projection.homeLineup && projection.homeLineup.length > 0));
 
   if (isOfficialLineupAvailable) {
-    const allHitters = [
-      ...(projection.awayLineup || []).map(h => ({ ...h, teamName: awayName, oppPitcher: projection.model.homePitcherMetrics })),
-      ...(projection.homeLineup || []).map(h => ({ ...h, teamName: homeName, oppPitcher: projection.model.awayPitcherMetrics }))
-    ].filter(h => h.name && !h.name.includes("N/D"));
+    const awayHitters = (projection.awayLineup || [])
+      .map(h => ({ ...h, teamName: awayName, role: "Visitante", icon: "✈️" }))
+      .filter(h => h.name && !h.name.includes("N/D"));
+      
+    const homeHitters = (projection.homeLineup || [])
+      .map(h => ({ ...h, teamName: homeName, role: "Local", icon: "🏠" }))
+      .filter(h => h.name && !h.name.includes("N/D"));
 
-    const usedPlayers = new Set();
+    // A) JONRÓN DE DESTACADO POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
+    const getBestHrHitter = (hitters) => {
+      const candidates = hitters
+        .filter(h => h.hrProb >= 0.06 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.190)))
+        .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
+      return candidates[0] || hitters.sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb))[0];
+    };
 
-    // A) MEJOR JUGADOR PARA JONRÓN (HOME RUN) (Se selecciona primero para reservar al mayor bateador de poder en racha)
-    const hrCandidates = [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.07 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.190)))
-      .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
+    const awayTopHr = getBestHrHitter([...awayHitters]);
+    const homeTopHr = getBestHrHitter([...homeHitters]);
 
-    // Fallback: Si todos los candidatos disponibles vinieran en racha fría o por debajo del umbral
-    const finalHrCandidates = hrCandidates.length > 0 ? hrCandidates : [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.05)
-      .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
+    if (awayTopHr && homeTopHr) {
+      const maxHrProb = Math.max(awayTopHr.hrProb, homeTopHr.hrProb);
+      const probPct = Math.round(maxHrProb * 100);
 
-    if (finalHrCandidates.length > 0) {
-      const topHrHitter = finalHrCandidates[0];
-      usedPlayers.add(topHrHitter.name);
-      const probPct = Math.round(topHrHitter.hrProb * 100);
-
-      let streakDetail = "";
-      if (topHrHitter.recentAvg != null) {
-        const recentStr = `.${Math.round(topHrHitter.recentAvg * 1000)}`;
-        if (topHrHitter.isHotHitter) {
-          streakDetail = ` Bateador en racha caliente 🔥 (${recentStr} AVG en 14J).`;
-        } else if (topHrHitter.recentAvg >= 0.250) {
-          streakDetail = ` En buen momento en sus últimos 14J (${recentStr}).`;
-        } else {
-          streakDetail = ` (Racha 14J: ${recentStr}).`;
+      const createHrItem = (hitter, icon) => {
+        const pPct = Math.round(hitter.hrProb * 100);
+        let streakStr = "";
+        if (hitter.recentAvg != null) {
+          const recentFormat = `.${Math.round(hitter.recentAvg * 1000)}`;
+          if (hitter.isHotHitter) streakStr = ` · 🔥 en racha (${recentFormat} en 14J)`;
+          else if (hitter.recentAvg >= 0.250) streakStr = ` · Buen momento (${recentFormat})`;
+          else streakStr = ` · 14J: ${recentFormat}`;
         }
-      }
+        return {
+          icon,
+          teamName: hitter.teamName,
+          playerName: hitter.name,
+          betLine: "Over 0.5 HR",
+          probPct: pPct,
+          barColor: pPct >= 20 ? "bg-gradient-to-r from-purple-500 to-indigo-500" : "bg-gradient-to-r from-purple-400 to-amber-500",
+          details: `<strong>Over 0.5 Jonrones</strong>${streakStr} · ${hitter.homeRuns || 10} HR temp`
+        };
+      };
 
       candidateBets.push({
-        category: "BATEADOR · JONRÓN",
-        title: `Jonrón Por Jugador (${topHrHitter.name} (${topHrHitter.teamName}))`,
-        selection: `Over 0.5 Jonrones (${topHrHitter.name})`,
-        prob: topHrHitter.hrProb,
+        category: "BATEADOR · JONRONES",
+        title: "Jonrón Destacado Por Equipo",
+        selection: `Over 0.5 HR (${awayTopHr.name} / ${homeTopHr.name})`,
+        prob: maxHrProb,
         probPct,
         tier: "VALOR",
         tierBadge: "💥 Poder Extrabase",
         tierBg: "bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300 border-purple-300 dark:border-purple-700",
-        metricLabel: `Prob HR: ${probPct}%`,
-        subText: `Bateador de poder del encuentro (${topHrHitter.homeRuns || 10} HR en la temporada).${streakDetail} Excelente proyección frente al lanzador rival.`,
+        metricLabel: `Prob HR: ${Math.round(awayTopHr.hrProb * 100)}% (${awayName}) | ${Math.round(homeTopHr.hrProb * 100)}% (${homeName})`,
+        teamItems: [
+          createHrItem(awayTopHr, "✈️"),
+          createHrItem(homeTopHr, "🏠")
+        ],
         icon: "sparkles",
         order: 7
       });
     }
 
-    // B) MEJOR JUGADOR PARA HITS (Exactamente 1 jugador, sin repetir)
-    const hitsCandidates = [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && h.pHits1 >= 0.60)
-      .sort((a, b) => b.pHits1 - a.pHits1);
+    // B) HITS DESTACADOS POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
+    const getBestHitsHitter = (hitters) => {
+      return hitters
+        .filter(h => h.pHits1 >= 0.55)
+        .sort((a, b) => b.pHits1 - a.pHits1)[0] || hitters.sort((a, b) => b.pHits1 - a.pHits1)[0];
+    };
 
-    if (hitsCandidates.length > 0) {
-      const topHitsHitter = hitsCandidates[0];
-      usedPlayers.add(topHitsHitter.name);
-      const probPct = Math.round(topHitsHitter.pHits1 * 100);
+    const awayTopHits = getBestHitsHitter([...awayHitters]);
+    const homeTopHits = getBestHitsHitter([...homeHitters]);
+
+    if (awayTopHits && homeTopHits) {
+      const avgProb = (awayTopHits.pHits1 + homeTopHits.pHits1) / 2;
+      const probPct = Math.round(avgProb * 100);
       let tier = "VALOR";
       let tierBadge = "🎯 Ángulo de Valor";
       let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (topHitsHitter.pHits1 >= 0.72) {
+      if (avgProb >= 0.70) {
         tier = "CANDADO";
         tierBadge = "👑 Candado de Hits";
         tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
-      } else if (topHitsHitter.pHits1 >= 0.65) {
+      } else if (avgProb >= 0.63) {
         tier = "SEGURA";
         tierBadge = "🛡️ Apuesta Segura";
         tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
       }
 
-      const recentStr = topHitsHitter.recentAvg ? ` (ult 14J: .${Math.round(topHitsHitter.recentAvg * 1000)})` : "";
+      const createHitsItem = (hitter, icon) => {
+        const isOver1_5 = hitter.projectedHits >= 1.35 || hitter.pHits2 >= 0.48;
+        const lineText = isOver1_5 ? "Over 1.5 Hits" : "Over 0.5 Hits";
+        const prob = isOver1_5 ? hitter.pHits2 : hitter.pHits1;
+        const pPct = Math.round(prob * 100);
+        const recentStr = hitter.recentAvg ? ` · ult 14J: .${Math.round(hitter.recentAvg * 1000)}` : "";
+        return {
+          icon,
+          teamName: hitter.teamName,
+          playerName: hitter.name,
+          betLine: lineText,
+          probPct: pPct,
+          barColor: pPct >= 70 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-indigo-500 to-sky-400",
+          details: `<strong>${lineText}</strong> (${hitter.projectedHits.toFixed(1)} Hits Est.) · AVG .${Math.round((hitter.avg || 0.245) * 1000)}${recentStr}`
+        };
+      };
+
       candidateBets.push({
         category: "BATEADOR · HITS",
-        title: `Hits totales por jugador (${topHitsHitter.name} (${topHitsHitter.teamName}))`,
-        selection: `1+ Hit (${topHitsHitter.name})`,
-        prob: topHitsHitter.pHits1,
+        title: "Hits Totales Por Equipo",
+        selection: `Hits (${awayTopHits.name} / ${homeTopHits.name})`,
+        prob: avgProb,
         probPct,
         tier,
         tierBadge,
         tierBg,
-        metricLabel: `Hits Est: ${topHitsHitter.projectedHits.toFixed(1)} H (${probPct}% prob)`,
-        subText: `AVG .${Math.round((topHitsHitter.avg || 0.245) * 1000)}${recentStr}. Promedia ${topHitsHitter.projectedHits.toFixed(1)} Hits proyectados en ${topHitsHitter.expectedPA} apariciones.`,
+        metricLabel: `Hits Est: ${awayTopHits.projectedHits.toFixed(1)} H (${awayName}) | ${homeTopHits.projectedHits.toFixed(1)} H (${homeName})`,
+        teamItems: [
+          createHitsItem(awayTopHits, "✈️"),
+          createHitsItem(homeTopHits, "🏠")
+        ],
         icon: "zap",
         order: 5
       });
     }
 
-    // C) MEJOR JUGADOR PARA BASES TOTALES (Exactamente 1 jugador, sin repetir los anteriores)
-    const tbCandidates = [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && (h.pTB1_5 >= 0.45 || h.projectedTB >= 1.3))
-      .sort((a, b) => b.pTB1_5 - a.pTB1_5);
+    // C) BASES TOTALES DESTACADAS POR EQUIPO (1 Visitante ✈️ y 1 Local 🏠)
+    const getBestTbHitter = (hitters) => {
+      return hitters
+        .filter(h => h.pTB1_5 >= 0.40 || h.projectedTB >= 1.2)
+        .sort((a, b) => b.pTB1_5 - a.pTB1_5)[0] || hitters.sort((a, b) => b.pTB1_5 - a.pTB1_5)[0];
+    };
 
-    if (tbCandidates.length > 0) {
-      const topTbHitter = tbCandidates[0];
-      usedPlayers.add(topTbHitter.name);
-      const probPct = Math.round(topTbHitter.pTB1_5 * 100);
+    const awayTopTb = getBestTbHitter([...awayHitters]);
+    const homeTopTb = getBestTbHitter([...homeHitters]);
+
+    if (awayTopTb && homeTopTb) {
+      const avgProb = (awayTopTb.pTB1_5 + homeTopTb.pTB1_5) / 2;
+      const probPct = Math.round(avgProb * 100);
       let tier = "VALOR";
       let tierBadge = "🎯 Ángulo de Valor";
       let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (topTbHitter.pTB1_5 >= 0.60) {
+      if (avgProb >= 0.58) {
         tier = "CANDADO";
         tierBadge = "👑 Candado Extrabase";
         tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
-      } else if (topTbHitter.pTB1_5 >= 0.52) {
+      } else if (avgProb >= 0.50) {
         tier = "SEGURA";
         tierBadge = "🛡️ Apuesta Segura";
         tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
       }
 
-      const tbLineText = topTbHitter.pTB1_5 >= 0.50 ? "2+ Bases Totales" : "1+ Base Total";
+      const createTbItem = (hitter, icon) => {
+        const isOver1_5 = hitter.pTB1_5 >= 0.48 || hitter.projectedTB >= 1.45;
+        const lineText = isOver1_5 ? "Over 1.5 TB" : "Over 0.5 TB";
+        const pPct = Math.round((isOver1_5 ? hitter.pTB1_5 : clamp(1 - Math.exp(-hitter.projectedTB), 0.40, 0.90)) * 100);
+        return {
+          icon,
+          teamName: hitter.teamName,
+          playerName: hitter.name,
+          betLine: lineText,
+          probPct: pPct,
+          barColor: pPct >= 60 ? "bg-gradient-to-r from-indigo-500 to-sky-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
+          details: `<strong>${lineText}</strong> (${hitter.projectedTB.toFixed(1)} TB Est.) · SLG .${Math.round((hitter.slg || 0.400) * 1000)}`
+        };
+      };
+
       candidateBets.push({
         category: "BATEADOR · BASES TOTALES",
-        title: `Bases Totales Por Jugador (${topTbHitter.name} (${topTbHitter.teamName}))`,
-        selection: `${tbLineText} (${topTbHitter.name})`,
-        prob: topTbHitter.pTB1_5,
+        title: "Bases Totales Destacadas Por Equipo",
+        selection: `Bases Totales (${awayTopTb.name} / ${homeTopTb.name})`,
+        prob: avgProb,
         probPct,
         tier,
         tierBadge,
         tierBg,
-        metricLabel: `TB Est: ${topTbHitter.projectedTB.toFixed(1)} TB (${probPct}% prob)`,
-        subText: `SLG .${Math.round((topTbHitter.slg || 0.400) * 1000)}. Proyección de ${topTbHitter.projectedTB.toFixed(1)} Bases Totales vs pitcher abridor rival.`,
+        metricLabel: `TB Est: ${awayTopTb.projectedTB.toFixed(1)} TB (${awayName}) | ${homeTopTb.projectedTB.toFixed(1)} TB (${homeName})`,
+        teamItems: [
+          createTbItem(awayTopTb, "✈️"),
+          createTbItem(homeTopTb, "🏠")
+        ],
         icon: "flame",
         order: 6
       });
@@ -3079,6 +3135,40 @@ function renderBestBets(projection) {
         ? "bg-gradient-to-r from-indigo-500 to-sky-400"
         : "bg-gradient-to-r from-amber-500 to-yellow-400";
 
+    const teamListHtml = bet.teamItems ? `
+      <div class="space-y-2 mb-3">
+        ${bet.teamItems.map(item => `
+          <div class="flex flex-col gap-1.5 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between gap-1">
+              <div class="flex items-center gap-1.5 font-mono text-xs overflow-hidden">
+                <span class="text-base leading-none shrink-0">${item.icon}</span>
+                <span class="font-black text-slate-900 dark:text-white uppercase font-mono shrink-0">${escapeHtml(item.teamName)}:</span>
+                <span class="font-bold text-emerald-600 dark:text-emerald-400 truncate">${escapeHtml(item.playerName)}</span>
+              </div>
+              <span class="inline-flex items-center shrink-0 rounded bg-slate-200/80 dark:bg-slate-700/80 px-2 py-0.5 text-[10px] font-black text-slate-800 dark:text-slate-200 font-mono">
+                ${escapeHtml(item.betLine)}
+              </span>
+            </div>
+            
+            <div class="text-[11px] font-semibold text-slate-600 dark:text-slate-350 leading-snug">
+              ${item.details}
+            </div>
+
+            <!-- Mini Barra de Porcentaje por Jugador -->
+            <div class="mt-0.5">
+              <div class="flex items-center justify-between text-[10px] font-bold mb-0.5">
+                <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
+                <span class="text-slate-900 dark:text-white font-mono font-black">${item.probPct}%</span>
+              </div>
+              <div class="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                <div class="h-full rounded-full ${item.barColor} transition-all duration-500" style="width: ${item.probPct}%"></div>
+              </div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    ` : `<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium mb-3">${escapeHtml(bet.subText)}</p>`;
+
     return `
       <div class="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-panel dark:shadow-panel-dark transition hover:border-emerald-500/50 flex flex-col justify-between">
         <div>
@@ -3101,10 +3191,8 @@ function renderBestBets(projection) {
             <span>${escapeHtml(bet.metricLabel)}</span>
           </div>
 
-          <!-- Razón Sabermétrica -->
-          <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium mb-3">
-            ${escapeHtml(bet.subText)}
-          </p>
+          <!-- Razón Sabermétrica / Lista de Equipos -->
+          ${teamListHtml}
         </div>
 
         <!-- Barra de Probabilidad -->

@@ -1788,14 +1788,6 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
     
     let pBase = splitObp * adjustedFactor;
     pBase = clamp(pBase, 0.15, 0.50);
-    
-    const hitterHrPerGame = stats.homeRuns / (stats.games || 1);
-    const pitcherHr9 = numberOr(opposingPitcher?.hr9, LEAGUE.pitcherHr9);
-    const pitcherHrFactor = pitcherHr9 / LEAGUE.pitcherHr9;
-    const adjustedHrFactor = 1.0 + (pitcherHrFactor - 1.0) * 0.5;
-    const expectedHr = hitterHrPerGame * adjustedHrFactor;
-    let hrProb = 1.0 - Math.exp(-expectedHr);
-    hrProb = clamp(hrProb, 0.01, 0.45);
 
     // --- CÁLCULO MATEMÁTICO DE HITS Y BASES TOTALES POR JUGADOR ---
     const expectedPA = Math.max(3.5, 4.6 - index * 0.11);
@@ -1815,22 +1807,74 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
     const pHits2 = clamp(1 - Math.exp(-projectedHits) * (1 + projectedHits), 0.05, 0.65);
     
     const slg = Number.isFinite(stats.slg) && stats.slg > 0 ? stats.slg : LEAGUE.slg;
-    const iso = Math.max(0.06, slg - effectiveAvg);
+    const iso = Math.max(0.04, slg - (Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage));
     const tbPerHit = clamp(1.0 + (iso / Math.max(0.180, effectiveAvg)) * 1.25, 1.15, 2.10);
     const projectedTB = projectedHits * tbPerHit;
     const pTB1_5 = clamp(1 - Math.exp(-projectedTB) * (1 + 0.55 * projectedTB), 0.10, 0.85);
+
+    // --- CÁLCULO SABERMÉTRICO DE JONRONES (HR%) CON RACHA (14J) Y FACTOR DE TEMPERATURA ---
+    // 1. Ratio de Jonrones por Aparición (HR/PA) con Suavizado Bayesiano
+    const totalPa = stats.plateAppearances || (stats.games ? stats.games * 3.8 : 150);
+    const homeRuns = stats.homeRuns || 0;
+    const smoothedHrPerPA = (homeRuns + 2.0) / (Math.max(30, totalPa) + 70);
+
+    // 2. Factor de Racha Reciente (14J) / Temperatura del Bateador
+    let streakFactor = 1.0;
+    let isColdHitter = false;
+    let isHotHitter = false;
+
+    if (Number.isFinite(stats.recentAvg) && stats.recentAvg > 0 && Number.isFinite(stats.avg) && stats.avg > 0) {
+      const streakDiff = stats.recentAvg - stats.avg;
+      const streakRatio = stats.recentAvg / stats.avg;
+      
+      if (streakDiff <= -0.040 || stats.recentAvg < 0.190) {
+        // En racha fría ❄️: Penalización directa al poder y contacto por slump
+        isColdHitter = true;
+        streakFactor = clamp(1.0 + streakDiff * 2.2, 0.60, 0.88);
+      } else if (streakDiff >= 0.040 && stats.recentAvg >= 0.260) {
+        // En racha caliente 🔥: Impulso por excelente momento ofensivo
+        isHotHitter = true;
+        streakFactor = clamp(1.0 + streakDiff * 1.8, 1.12, 1.35);
+      } else {
+        // Racha estable
+        streakFactor = clamp(1.0 + (streakRatio - 1.0) * 0.4, 0.88, 1.12);
+      }
+    }
+
+    // 3. Ajuste por Split vs Lanzador Rival (OBP / Split)
+    const splitObpVal = splitObp || stats.obp || LEAGUE.obp;
+    const splitFactor = clamp(splitObpVal / LEAGUE.obp, 0.80, 1.25);
+
+    // 4. Ajuste por HR/9 permitidos por el Pitcher Rival
+    const pitcherHr9 = numberOr(opposingPitcher?.hr9, LEAGUE.pitcherHr9);
+    const pitcherHrFactor = clamp(pitcherHr9 / LEAGUE.pitcherHr9, 0.65, 1.45);
+
+    // 5. HR Esperados en el Partido (Modelo Poisson)
+    const effectiveHrPerPA = smoothedHrPerPA * streakFactor * splitFactor * (0.60 + 0.40 * pitcherHrFactor);
+    const expectedHrGame = expectedPA * effectiveHrPerPA;
+    let hrProb = 1.0 - Math.exp(-expectedHrGame);
+    hrProb = clamp(hrProb, 0.01, 0.45);
+
+    // 6. Score de Selección para Best Bets (penaliza fuertemente a bateadores en frío)
+    const coldPenaltyMultiplier = isColdHitter ? 0.50 : (stats.recentAvg < 0.210 ? 0.65 : 1.0);
+    const hotBoostMultiplier = isHotHitter ? 1.20 : 1.0;
+    const hrScore = hrProb * streakFactor * coldPenaltyMultiplier * hotBoostMultiplier;
 
     return {
       ...stats,
       pBase,
       hrProb,
+      streakFactor,
+      isColdHitter,
+      isHotHitter,
+      hrScore,
       expectedPA: round1(expectedPA),
       projectedHits: round1(projectedHits),
       pHits1,
       pHits2,
       projectedTB: round1(projectedTB),
       pTB1_5,
-      splitLabel: `${splitObp.toFixed(3)} vs${opponentHand}`,
+      splitLabel: `${(splitObp || stats.obp || 0.320).toFixed(3)} vs${opponentHand}`,
     };
   }));
   
@@ -2963,14 +3007,33 @@ function calcularBestBets(projection) {
     }
 
     // C) MEJOR JUGADOR PARA JONRÓN (HOME RUN) (Exactamente 1 jugador, sin repetir)
+    // Filtro estricto: Prioriza bateadores en buena racha y descarta o penaliza severamente a quienes vienen en frío ❄️
     const hrCandidates = [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.08)
-      .sort((a, b) => b.hrProb - a.hrProb);
+      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.07 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.190)))
+      .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
 
-    if (hrCandidates.length > 0) {
-      const topHrHitter = hrCandidates[0];
+    // Fallback: Si todos los candidatos disponibles vinieran en racha fría o por debajo del umbral
+    const finalHrCandidates = hrCandidates.length > 0 ? hrCandidates : [...allHitters]
+      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.05)
+      .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
+
+    if (finalHrCandidates.length > 0) {
+      const topHrHitter = finalHrCandidates[0];
       usedPlayers.add(topHrHitter.name);
       const probPct = Math.round(topHrHitter.hrProb * 100);
+
+      let streakDetail = "";
+      if (topHrHitter.recentAvg != null) {
+        const recentStr = `.${Math.round(topHrHitter.recentAvg * 1000)}`;
+        if (topHrHitter.isHotHitter) {
+          streakDetail = ` Bateador en racha caliente 🔥 (${recentStr} AVG en 14J).`;
+        } else if (topHrHitter.recentAvg >= 0.250) {
+          streakDetail = ` En buen momento en sus últimos 14J (${recentStr}).`;
+        } else {
+          streakDetail = ` (Racha 14J: ${recentStr}).`;
+        }
+      }
+
       candidateBets.push({
         category: "BATEADOR · JONRÓN",
         title: `Jonrón Por Jugador (${topHrHitter.name} (${topHrHitter.teamName}))`,
@@ -2981,7 +3044,7 @@ function calcularBestBets(projection) {
         tierBadge: "💥 Poder Extrabase",
         tierBg: "bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300 border-purple-300 dark:border-purple-700",
         metricLabel: `Prob HR: ${probPct}%`,
-        subText: `Bateador de mayor poder del encuentro (${topHrHitter.homeRuns || 10} HR en la temporada) frente al lanzador rival.`,
+        subText: `Bateador de poder del encuentro (${topHrHitter.homeRuns || 10} HR en la temporada).${streakDetail} Excelente proyección frente al lanzador rival.`,
         icon: "sparkles",
         order: 7
       });

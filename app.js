@@ -1816,34 +1816,58 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
     let pBase = splitObp * adjustedFactor;
     pBase = clamp(pBase, 0.15, 0.50);
 
-    // --- CÁLCULO MATEMÁTICO DE HITS Y BASES TOTALES POR JUGADOR ---
-    const expectedPA = Math.max(3.5, 4.6 - index * 0.11);
-    
-    // Promedio ponderado (70% temporada, 30% racha reciente)
+    // --- CÁLCULO MATEMÁTICO AVANZADO DE HITS Y BASES TOTALES (BINOMIAL + LOG5 + LINEUP PA) ---
+    // 1. Turnos proyectados (PA) y Turnos Oficiales (AB) según puesto en lineup
+    const lineupOrder = index + 1;
+    const paEst = lineupOrder <= 2 ? 4.7 : (lineupOrder <= 5 ? 4.4 : 3.8);
+    const bbRate = Number.isFinite(stats.bbPct) ? stats.bbPct : 0.08;
+    const expectedAB = Math.max(3.0, paEst * (1 - bbRate));
+
+    // 2. Promedio ponderado (70% temporada, 30% racha reciente en 14J)
     let effectiveAvg = Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage;
     if (Number.isFinite(stats.recentAvg) && stats.recentAvg > 0) {
       effectiveAvg = 0.70 * effectiveAvg + 0.30 * stats.recentAvg;
     }
-    
-    const pitcherH9 = numberOr(opposingPitcher?.hitsPerNine, LEAGUE.pitcherHits9);
-    const pitcherH9Factor = pitcherH9 / LEAGUE.pitcherHits9;
-    const pHitPA = clamp(effectiveAvg * (0.65 + 0.35 * pitcherH9Factor) * (0.65 + 0.35 * adjustedFactor), 0.12, 0.42);
-    
-    const projectedHits = expectedPA * pHitPA;
-    const pHits1 = clamp(1 - Math.pow(1 - pHitPA, expectedPA), 0.15, 0.92);
-    const pHits2 = clamp(1 - Math.exp(-projectedHits) * (1 + projectedHits), 0.05, 0.65);
-    
-    const slg = Number.isFinite(stats.slg) && stats.slg > 0 ? stats.slg : LEAGUE.slg;
-    const iso = Math.max(0.04, slg - (Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage));
-    const tbPerHit = clamp(1.0 + (iso / Math.max(0.180, effectiveAvg)) * 1.25, 1.15, 2.10);
-    const projectedTB = projectedHits * tbPerHit;
-    const pTB1_5 = clamp(1 - Math.exp(-projectedTB) * (1 + 0.55 * projectedTB), 0.10, 0.85);
 
-    // --- CÁLCULO SABERMÉTRICO DE JONRONES (HR%) CON RACHA (14J) Y FACTOR DE TEMPERATURA ---
+    // 3. Matcheo Log5 Bill James (Bateador vs Pitcher H/9)
+    const pitcherH9 = numberOr(opposingPitcher?.hitsPerNine, LEAGUE.pitcherHits9);
+    const pitcherRate = clamp(pitcherH9 / 9.0, 0.15, 0.42);
+    const pLog5 = (effectiveAvg * pitcherRate) / ((effectiveAvg * pitcherRate) + ((1 - effectiveAvg) * (1 - pitcherRate)));
+
+    // 4. Ajuste por K% y factor de ajuste general del pitcher
+    const kRate = Number.isFinite(stats.kPct) ? stats.kPct : 0.20;
+    const pHitPA = clamp(pLog5 * (1 - 0.25 * kRate) * adjustedFactor, 0.14, 0.42);
+
+    const projectedHits = expectedAB * pHitPA;
+
+    // 5. Modelo Binomial Exacto P(Hits >= 1) y P(Hits >= 2)
+    const pZeroHits = Math.pow(1 - pHitPA, expectedAB);
+    const pOneHit = expectedAB * pHitPA * Math.pow(1 - pHitPA, expectedAB - 1);
+
+    const pHits1 = clamp(1 - pZeroHits, 0.20, 0.95);
+    const pHits2 = clamp(1 - pZeroHits - pOneHit, 0.05, 0.60);
+
+    // 6. CÁLCULO SABERMÉTRICO AVANZADO DE BASES TOTALES (TB)
+    const slg = Number.isFinite(stats.slg) && stats.slg > 0 ? stats.slg : LEAGUE.slg;
+    const iso = Math.max(0.03, slg - (Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage));
+    
+    // Log5 SLG vs Pitcher
+    const pitcherSlgFactor = clamp(pitcherH9 / LEAGUE.pitcherHits9, 0.65, 1.40);
+    const effectiveSlg = clamp(slg * (0.60 + 0.40 * pitcherSlgFactor) * adjustedFactor, 0.250, 0.700);
+    const tbPerHit = clamp(1.0 + (iso / Math.max(0.180, effectiveAvg)) * 1.30, 1.15, 2.20);
+    const projectedTB = projectedHits * tbPerHit;
+
+    // Probabilidad de Over 1.5 Bases Totales (Necesita 2+ Hits o 1 Extra-Base Hit: Doble, Triple o Jonrón)
+    const xbhRate = clamp(iso / Math.max(0.200, slg), 0.15, 0.55); // % de hits que son extrabases
+    const pXbhPA = pHitPA * xbhRate;
+    const pAtLeastOneXbh = 1 - Math.pow(1 - pXbhPA, expectedAB);
+    const pTB1_5 = clamp(Math.max(pHits2, pAtLeastOneXbh + (1 - pAtLeastOneXbh) * pHits2 * 0.75), 0.10, 0.88);
+
+    // --- CÁLCULO SABERMÉTRICO DE JONRONES (HR%) CON LOG5 + RACHA + PITCHER HR/9 ---
     // 1. Ratio de Jonrones por Aparición (HR/PA) con Suavizado Bayesiano
     const totalPa = stats.plateAppearances || (stats.games ? stats.games * 3.8 : 150);
     const homeRuns = stats.homeRuns || 0;
-    const smoothedHrPerPA = (homeRuns + 2.0) / (Math.max(30, totalPa) + 70);
+    const batterHrPerPA = (homeRuns + 2.0) / (Math.max(30, totalPa) + 70);
 
     // 2. Factor de Racha Reciente (14J) / Temperatura del Bateador
     let streakFactor = 1.0;
@@ -1855,32 +1879,33 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
       const streakRatio = stats.recentAvg / stats.avg;
       
       if (streakDiff <= -0.040 || stats.recentAvg < 0.190) {
-        // En racha fría ❄️: Penalización directa al poder y contacto por slump
         isColdHitter = true;
         streakFactor = clamp(1.0 + streakDiff * 2.2, 0.60, 0.88);
       } else if (streakDiff >= 0.040 && stats.recentAvg >= 0.260) {
-        // En racha caliente 🔥: Impulso por excelente momento ofensivo
         isHotHitter = true;
         streakFactor = clamp(1.0 + streakDiff * 1.8, 1.12, 1.35);
       } else {
-        // Racha estable
         streakFactor = clamp(1.0 + (streakRatio - 1.0) * 0.4, 0.88, 1.12);
       }
     }
 
-    // 3. Ajuste por Split vs Lanzador Rival (OBP / Split)
+    // 3. Matcheo Log5 de HR% (Bateador HR/PA vs Pitcher HR/PA)
+    const pitcherHr9 = numberOr(opposingPitcher?.hr9, LEAGUE.pitcherHr9);
+    const pitcherHrPerPA = clamp((pitcherHr9 / 9.0) * 0.26, 0.008, 0.065);
+    const leagueHrPerPA = LEAGUE.homeRunRate || 0.032;
+
+    // Fórmula Log5 para HR Rate
+    const hrRateLog5 = (batterHrPerPA * pitcherHrPerPA) / Math.max(0.0001, leagueHrPerPA);
+
+    // 4. Ajuste por Split vs Lanzador Rival (OBP / Split)
     const splitObpVal = splitObp || stats.obp || LEAGUE.obp;
     const splitFactor = clamp(splitObpVal / LEAGUE.obp, 0.80, 1.25);
 
-    // 4. Ajuste por HR/9 permitidos por el Pitcher Rival
-    const pitcherHr9 = numberOr(opposingPitcher?.hr9, LEAGUE.pitcherHr9);
-    const pitcherHrFactor = clamp(pitcherHr9 / LEAGUE.pitcherHr9, 0.65, 1.45);
-
-    // 5. HR Esperados en el Partido (Modelo Poisson)
-    const effectiveHrPerPA = smoothedHrPerPA * streakFactor * splitFactor * (0.60 + 0.40 * pitcherHrFactor);
+    // 5. HR Esperados en el Partido (Modelo Poisson P(HR >= 1) = 1 - e^-λ)
+    const effectiveHrPerPA = clamp(hrRateLog5 * streakFactor * splitFactor * adjustedFactor, 0.005, 0.120);
     const expectedHrGame = expectedPA * effectiveHrPerPA;
     let hrProb = 1.0 - Math.exp(-expectedHrGame);
-    hrProb = clamp(hrProb, 0.01, 0.45);
+    hrProb = clamp(hrProb, 0.01, 0.48);
 
     // 6. Score de Selección para Best Bets (penaliza fuertemente a bateadores en frío)
     const coldPenaltyMultiplier = isColdHitter ? 0.50 : (stats.recentAvg < 0.210 ? 0.65 : 1.0);
@@ -3238,7 +3263,9 @@ function calcularBestBets(projection) {
 
     const createHitsItem = (hitter, icon, isOppDominant) => {
       if (!hitter) return null;
-      const isOver1_5 = (hitter.projectedHits || 0) >= 1.35 || (hitter.pHits2 || 0) >= 0.48;
+      // Priorizar Over 0.5 Hits para mantener apuestas de alta confianza (65%-85%)
+      // Exigir Over 1.5 Hits únicamente cuando la probabilidad binomial de 2+ hits sea verdaderamente alta (>= 52%)
+      const isOver1_5 = (hitter.pHits2 || 0) >= 0.52;
       const lineText = isOver1_5 ? "Over 1.5 Hits" : "Over 0.5 Hits";
       let prob = isOver1_5 ? (hitter.pHits2 || 0.35) : (hitter.pHits1 || 0.60);
       if (isPitchingDuel) prob *= 0.80;

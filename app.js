@@ -2842,7 +2842,7 @@ function calcularBestBets(projection) {
       let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
       if (prob >= 0.67) {
         tier = "CANDADO";
-        tierBadge = "👑 Candado de Ponches";
+        tierBadge = "👑 Candado Ponches (Strikeouts)";
         tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
       } else if (prob >= 0.60) {
         tier = "SEGURA";
@@ -2851,16 +2851,16 @@ function calcularBestBets(projection) {
       }
 
       pitcherCandidates.push({
-        category: "PITCHER · PONCHES",
-        title: `${p.name || p.shortName} (${team}) — Over ${line} Ponches`,
-        selection: `Over ${line} K's de ${p.name || p.shortName}`,
+        category: "PITCHER · PONCHES (STRIKEOUTS)",
+        title: `${p.name || p.shortName} (${team}) — Over ${line} Ponches (Strikeouts)`,
+        selection: `Over ${line} Ponches (Strikeouts) de ${p.name || p.shortName}`,
         prob,
         probPct,
         tier,
         tierBadge,
         tierBg,
-        metricLabel: `Ponches Est: ${estKs.toFixed(1)} K's`,
-        subText: `Promedia ${m.k9.toFixed(1)} K/9 con proyección de ${ipEst.toFixed(1)} entradas sobre el terreno de juego.`,
+        metricLabel: `Ponches Est: ${estKs.toFixed(1)} (Strikeouts)`,
+        subText: `Promedia ${m.k9.toFixed(1)} K/9 (Strikeouts por cada 9 entradas) con proyección de ${ipEst.toFixed(1)} entradas en el partido.`,
         icon: "activity",
         order: 4
       });
@@ -3080,7 +3080,7 @@ function renderBestBets(projection) {
             <h3 class="text-base font-black uppercase tracking-wider text-slate-900 dark:text-white">🎯 Ángulos de Apuesta & Best Bets (Apuestas Más Seguras)</h3>
           </div>
           <p class="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-0.5">
-            Selección jerarquizada: 1 Ganador, 1 Hándicap, 1 Total, 1 Ponches, y 1 Bateador destacado por mercado (Hits, Bases y Jonrón).
+            Selección jerarquizada: 1 Ganador, 1 Hándicap, 1 Total, 1 Ponches (Strikeouts), y 1 Bateador destacado por mercado (Hits, Bases y Jonrón).
           </p>
         </div>
         <div class="flex items-center gap-2 self-start sm:self-center shrink-0">

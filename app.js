@@ -3169,7 +3169,9 @@ function calcularBestBets(projection) {
         .filter(h => h.hrProb >= 0.06 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.200)))
         .filter(h => !isOppDominant || (h.slg || 0) >= 0.460)
         .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
-      return candidates[0] || null;
+      if (candidates.length > 0) return candidates[0];
+      // Fallback: pick hitter with highest HR probability/score if strict filters returned no match
+      return hitters.sort((a, b) => (b.hrScore || b.hrProb || 0) - (a.hrScore || a.hrProb || 0))[0] || null;
     };
 
     const awayTopHr = getBestHrHitter([...awayHitters], isHomePitcherDominant);
@@ -3221,10 +3223,14 @@ function calcularBestBets(projection) {
     // B) HITS DESTACADOS POR EQUIPO (Con filtro de lanzador dominante y duelo de picheo)
     const getBestHitsHitter = (hitters, isOppDominant) => {
       if (!hitters || hitters.length === 0) return null;
-      return hitters
+      const filtered = hitters
         .filter(h => !h.isColdHitter && (h.recentAvg == null || h.recentAvg >= 0.200))
-        .filter(h => !isOppDominant || (h.avg || 0.250) >= 0.260)
-        .sort((a, b) => b.pHits1 - a.pHits1)[0] || null;
+        .filter(h => !isOppDominant || (h.avg || 0.250) >= 0.260);
+      if (filtered.length > 0) {
+        return filtered.sort((a, b) => (b.pHits1 || 0) - (a.pHits1 || 0))[0];
+      }
+      // Fallback si ningún bateador supera los filtros estrictos, para garantizar que ambos equipos aparezcan
+      return hitters.sort((a, b) => (b.pHits1 || b.projectedHits || 0) - (a.pHits1 || a.projectedHits || 0))[0] || null;
     };
 
     const awayTopHits = getBestHitsHitter([...awayHitters], isHomePitcherDominant);
@@ -3232,9 +3238,9 @@ function calcularBestBets(projection) {
 
     const createHitsItem = (hitter, icon, isOppDominant) => {
       if (!hitter) return null;
-      const isOver1_5 = hitter.projectedHits >= 1.35 || hitter.pHits2 >= 0.48;
+      const isOver1_5 = (hitter.projectedHits || 0) >= 1.35 || (hitter.pHits2 || 0) >= 0.48;
       const lineText = isOver1_5 ? "Over 1.5 Hits" : "Over 0.5 Hits";
-      let prob = isOver1_5 ? hitter.pHits2 : hitter.pHits1;
+      let prob = isOver1_5 ? (hitter.pHits2 || 0.35) : (hitter.pHits1 || 0.60);
       if (isPitchingDuel) prob *= 0.80;
       if (isOppDominant) prob *= 0.85;
       const pPct = Math.round(prob * 100);
@@ -3246,7 +3252,7 @@ function calcularBestBets(projection) {
         betLine: lineText,
         probPct: pPct,
         barColor: pPct >= 70 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-indigo-500 to-sky-400",
-        details: `<strong>${lineText}</strong> (${hitter.projectedHits.toFixed(1)} Hits Est.) · AVG .${Math.round((hitter.avg || 0.245) * 1000)}${recentStr}`
+        details: `<strong>${lineText}</strong> (${(hitter.projectedHits || 1.0).toFixed(1)} Hits Est.) · AVG .${Math.round((hitter.avg || 0.245) * 1000)}${recentStr}`
       };
     };
 
@@ -3296,8 +3302,7 @@ function calcularBestBets(projection) {
         if (isOppDominant && (h.slg || 0.400) < 0.440) return false;
         return true;
       });
-      const pool = validHitters.length > 0 ? validHitters : hitters.filter(h => !h.isColdHitter);
-      if (pool.length === 0) return null;
+      const pool = validHitters.length > 0 ? validHitters : hitters;
       return pool.sort((a, b) => (b.pTB1_5 || b.projectedTB || 0) - (a.pTB1_5 || a.projectedTB || 0))[0] || null;
     };
 

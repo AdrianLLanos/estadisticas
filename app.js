@@ -3428,6 +3428,19 @@ function renderBestBets(projection) {
         ? "bg-gradient-to-r from-indigo-500 to-sky-400"
         : "bg-gradient-to-r from-amber-500 to-yellow-400";
 
+    const getRiskBadge = (pct) => {
+      if (pct >= 70) {
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">🟢 Muy Segura</span>`;
+      }
+      if (pct >= 60) {
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">🔵 Segura</span>`;
+      }
+      if (pct >= 50) {
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">🟡 Medio Arriesgada</span>`;
+      }
+      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800">🔴 Arriesgada</span>`;
+    };
+
     const teamListHtml = bet.teamItems ? `
       <div class="space-y-2 mb-3">
         ${bet.teamItems.map(item => `
@@ -3456,7 +3469,10 @@ function renderBestBets(projection) {
             <!-- Fila 4: Mini Barra de Porcentaje por Jugador -->
             <div class="mt-0.5">
               <div class="flex items-center justify-between text-[10px] font-bold mb-0.5">
-                <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
+                <div class="flex items-center gap-1.5">
+                  <span class="text-slate-500 dark:text-slate-400 uppercase tracking-tight">Probabilidad</span>
+                  ${getRiskBadge(item.probPct)}
+                </div>
                 <span class="text-slate-900 dark:text-white font-mono font-black">${item.probPct}%</span>
               </div>
               <div class="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
@@ -3501,7 +3517,10 @@ function renderBestBets(projection) {
         <!-- Barra de Probabilidad: siempre en el fondo de la tarjeta -->
         <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
           <div class="flex items-center justify-between text-xs font-black mb-1">
-            <span class="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">Probabilidad Estimada</span>
+            <div class="flex items-center gap-1.5">
+              <span class="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">Probabilidad Estimada</span>
+              ${getRiskBadge(bet.probPct)}
+            </div>
             <span class="text-slate-900 dark:text-white">${bet.probPct}%</span>
           </div>
           <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">

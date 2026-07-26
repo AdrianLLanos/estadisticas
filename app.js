@@ -3025,7 +3025,7 @@ function calcularBestBets(projection) {
           betLine: awayLine,
           probPct: awayProb,
           barColor: awayIsPick ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
-          details: `<strong>${awayName} ${awayLine}</strong> · Diff: ${formatSigned(projection.diff)} · Confianza: ${rlConfidence}`
+          details: `<strong>${awayName} ${awayLine}</strong> · Diff proyectado: ${formatSigned(projection.diff)} · Prob: ${awayProb}%`
         },
         {
           icon: "🏠",
@@ -3034,7 +3034,7 @@ function calcularBestBets(projection) {
           betLine: homeLine,
           probPct: homeProb,
           barColor: homeIsPick ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-yellow-400",
-          details: `<strong>${homeName} ${homeLine}</strong> · Confianza: ${rlConfidence}`
+          details: `<strong>${homeName} ${homeLine}</strong> · Diff proyectado: ${formatSigned(projection.diff)} · Prob: ${homeProb}%`
         }
       ],
       icon: "shield-check",

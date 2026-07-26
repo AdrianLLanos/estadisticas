@@ -175,6 +175,7 @@ const els = {
   saveGeminiKeyBtn: document.querySelector("#saveGeminiKeyBtn"),
   clearGeminiKeyBtn: document.querySelector("#clearGeminiKeyBtn"),
   aiSummarySection: document.querySelector("#aiSummarySection"),
+  bestBetsSection: document.querySelector("#bestBetsSection"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -620,11 +621,13 @@ async function compareSelectedGame() {
       }
     }
 
-    // Resolve detailed lineup stats (including split & recent AVG)
-    const [awayLineupResolved, homeLineupResolved] = await Promise.all([
-      resolveLineupStats(awayLineupPlayers, awayRosterMap, awayStats, season, homePitcherMetrics),
-      resolveLineupStats(homeLineupPlayers, homeRosterMap, homeStats, season, awayPitcherMetrics),
-    ]);
+    // Resolve detailed lineup stats (including split & recent AVG) solo cuando la alineación oficial esté confirmada
+    const [awayLineupResolved, homeLineupResolved] = (lineupSource === "MLB" || lineupSource === "ESPN")
+      ? await Promise.all([
+          resolveLineupStats(awayLineupPlayers, awayRosterMap, awayStats, season, homePitcherMetrics),
+          resolveLineupStats(homeLineupPlayers, homeRosterMap, homeStats, season, awayPitcherMetrics),
+        ])
+      : [null, null];
 
     // Compute lineup offense stats and adjust team stats
     let adjustedAwayStats = { ...awayStats };
@@ -678,6 +681,7 @@ async function compareSelectedGame() {
 
     renderMatchupHeader(game, projection);
     renderSummary(projection);
+    renderBestBets(projection);
     renderPitchers(projection);
     renderLineups(projection);
     renderBullpens(projection);
@@ -1727,6 +1731,24 @@ function getMlbLineupPlayers(mlbLineupIds, teamBoxscore) {
   });
 }
 
+function getProjectedLineupFromRoster(rosterMap) {
+  if (!rosterMap || rosterMap.size === 0) return null;
+  const hitters = Array.from(rosterMap.values())
+    .filter(p => p && p.id && p.name && p.name !== "N/D" && ((p.games && p.games >= 3) || (p.avg && p.avg > 0.150)))
+    .sort((a, b) => {
+      const scoreA = (a.obp || a.avg || 0.25) * Math.min(a.games || 10, 50);
+      const scoreB = (b.obp || b.avg || 0.25) * Math.min(b.games || 10, 50);
+      return scoreB - scoreA;
+    });
+
+  if (hitters.length < 5) return null;
+  return hitters.slice(0, 9).map((p, i) => ({
+    id: p.id,
+    name: p.name,
+    position: p.position || "D",
+  }));
+}
+
 async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, opposingPitcher) {
   if (!lineupPlayers) return null;
   
@@ -1774,11 +1796,40 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
     const expectedHr = hitterHrPerGame * adjustedHrFactor;
     let hrProb = 1.0 - Math.exp(-expectedHr);
     hrProb = clamp(hrProb, 0.01, 0.45);
+
+    // --- CÁLCULO MATEMÁTICO DE HITS Y BASES TOTALES POR JUGADOR ---
+    const expectedPA = Math.max(3.5, 4.6 - index * 0.11);
     
+    // Promedio ponderado (70% temporada, 30% racha reciente)
+    let effectiveAvg = Number.isFinite(stats.avg) && stats.avg > 0 ? stats.avg : LEAGUE.battingAverage;
+    if (Number.isFinite(stats.recentAvg) && stats.recentAvg > 0) {
+      effectiveAvg = 0.70 * effectiveAvg + 0.30 * stats.recentAvg;
+    }
+    
+    const pitcherH9 = numberOr(opposingPitcher?.hitsPerNine, LEAGUE.pitcherHits9);
+    const pitcherH9Factor = pitcherH9 / LEAGUE.pitcherHits9;
+    const pHitPA = clamp(effectiveAvg * (0.65 + 0.35 * pitcherH9Factor) * (0.65 + 0.35 * adjustedFactor), 0.12, 0.42);
+    
+    const projectedHits = expectedPA * pHitPA;
+    const pHits1 = clamp(1 - Math.pow(1 - pHitPA, expectedPA), 0.15, 0.92);
+    const pHits2 = clamp(1 - Math.exp(-projectedHits) * (1 + projectedHits), 0.05, 0.65);
+    
+    const slg = Number.isFinite(stats.slg) && stats.slg > 0 ? stats.slg : LEAGUE.slg;
+    const iso = Math.max(0.06, slg - effectiveAvg);
+    const tbPerHit = clamp(1.0 + (iso / Math.max(0.180, effectiveAvg)) * 1.25, 1.15, 2.10);
+    const projectedTB = projectedHits * tbPerHit;
+    const pTB1_5 = clamp(1 - Math.exp(-projectedTB) * (1 + 0.55 * projectedTB), 0.10, 0.85);
+
     return {
       ...stats,
       pBase,
       hrProb,
+      expectedPA: round1(expectedPA),
+      projectedHits: round1(projectedHits),
+      pHits1,
+      pHits2,
+      projectedTB: round1(projectedTB),
+      pTB1_5,
       splitLabel: `${splitObp.toFixed(3)} vs${opponentHand}`,
     };
   }));
@@ -2391,7 +2442,13 @@ function renderGames() {
       const lineupInfo = state.lineupStatusMap.get(game.gamePk);
       let lineupBadgeHtml = "";
       if (lineupInfo?.hasLineup) {
-        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-350 bg-emerald-100 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800/60"><i data-lucide="check-circle-2" class="h-3 w-3"></i> Lineup ${lineupInfo.source}</span>`;
+        const isOfficial = lineupInfo.source === "MLB" || lineupInfo.source === "ESPN";
+        const labelText = isOfficial ? `Lineup ${lineupInfo.source} (Oficial)` : `Lineup Proyectado (Roster)`;
+        const badgeClasses = isOfficial
+          ? "text-emerald-700 dark:text-emerald-350 bg-emerald-100 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800/60"
+          : "text-sky-700 dark:text-sky-350 bg-sky-100 dark:bg-sky-950/50 border-sky-300 dark:border-sky-800/60";
+
+        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-bold ${badgeClasses} px-2 py-0.5 rounded-full border"><i data-lucide="check-circle-2" class="h-3 w-3"></i> ${labelText}</span>`;
       } else {
         lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/50"><i data-lucide="clock" class="h-3 w-3"></i> Lineup pendiente</span>`;
       }
@@ -2677,6 +2734,377 @@ function renderSummary(projection) {
     )
     .join("");
 }
+
+function calcularBestBets(projection) {
+  if (!projection) return [];
+
+  const candidateBets = [];
+  const awayName = projection.awayName;
+  const homeName = projection.homeName;
+  const awayPitcher = projection.pitchers?.away;
+  const homePitcher = projection.pitchers?.home;
+
+  // 1. Ganador Directo (Moneyline) — 1 Apuesta Máximo
+  const winProb = projection.winProbability;
+  const favTeam = projection.favorite;
+  const favPct = Math.round(winProb * 100);
+  if (winProb >= 0.52) {
+    let tier = "VALOR";
+    let tierBadge = "🎯 Ángulo de Valor";
+    let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+    if (winProb >= 0.66) {
+      tier = "CANDADO";
+      tierBadge = "👑 Candado Ganador";
+      tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+    } else if (winProb >= 0.58) {
+      tier = "SEGURA";
+      tierBadge = "🛡️ Apuesta Segura";
+      tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+    }
+    candidateBets.push({
+      category: "EQUIPO · GANADOR",
+      title: `${favTeam} — Ganador Directo (Moneyline)`,
+      selection: `${favTeam} a Ganar`,
+      prob: winProb,
+      probPct: favPct,
+      tier,
+      tierBadge,
+      tierBg,
+      metricLabel: `Prob: ${favPct}%`,
+      subText: `Modelo asigna un ${favPct}% de probabilidad de victoria analizando abridores, bullpen e indicador Pythagenpat.`,
+      icon: "trophy",
+      order: 1
+    });
+  }
+
+  // 2. Total Carreras (Over / Under) — 1 Apuesta Máximo
+  if (projection.totalLean && !projection.totalLean.includes("medio")) {
+    const estimate = projection.totalRuns.toFixed(1);
+    const totalProb = projection.totalConfidence === "Alta" ? 0.65 : (projection.totalConfidence === "Media" ? 0.58 : 0.53);
+    let tier = "VALOR";
+    let tierBadge = "🎯 Ángulo de Valor";
+    let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+    if (totalProb >= 0.62) {
+      tier = "SEGURA";
+      tierBadge = "🛡️ Apuesta Segura";
+      tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+    }
+    candidateBets.push({
+      category: "PARTIDO · CARRERAS",
+      title: `${projection.totalLean} Carreras`,
+      selection: `${projection.totalLean} (${estimate} est.)`,
+      prob: totalProb,
+      probPct: Math.round(totalProb * 100),
+      tier,
+      tierBadge,
+      tierBg,
+      metricLabel: `Est: ${estimate} runs`,
+      subText: `Modelo Sabermétrico proyecta ${estimate} carreras totales (${awayName} ${projection.awayRuns} - ${homeName} ${projection.homeRuns}).`,
+      icon: "trending-up",
+      order: 2
+    });
+  }
+
+  // 3. Handicap / Run Line (+1.5 / -1.5) — 1 Apuesta Máximo
+  if (projection.runLinePick && projection.confidence !== "Baja") {
+    const rlProb = projection.confidence === "Alta" ? 0.64 : 0.57;
+    candidateBets.push({
+      category: "EQUIPO · HANDICAP",
+      title: `${projection.runLinePick}`,
+      selection: `${projection.runLinePick}`,
+      prob: rlProb,
+      probPct: Math.round(rlProb * 100),
+      tier: "SEGURA",
+      tierBadge: "🛡️ Apuesta Segura",
+      tierBg: "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700",
+      metricLabel: `Diff: ${formatSigned(projection.diff)}`,
+      subText: `Diferencial de carreras proyectado de ${formatSigned(projection.diff)} respalda la línea de hándicap.`,
+      icon: "shield-check",
+      order: 3
+    });
+  }
+
+  // 4. Ponches de Pitcher Abridor — 1 Apuesta Máximo (el abridor con mayor proyección de K's)
+  const pitcherCandidates = [];
+  [
+    { p: awayPitcher, m: projection.model?.awayPitcherMetrics, team: awayName },
+    { p: homePitcher, m: projection.model?.homePitcherMetrics, team: homeName }
+  ].forEach(({ p, m, team }) => {
+    if (!p || !m || !m.k9) return;
+    const ipEst = m.inningsPerStart || 5.2;
+    const estKs = (m.k9 / 9) * ipEst;
+    if (estKs >= 4.5) {
+      const line = Math.floor(estKs - 0.5) + 0.5;
+      const prob = clamp(0.55 + (estKs - line) * 0.12, 0.54, 0.74);
+      const probPct = Math.round(prob * 100);
+      let tier = "VALOR";
+      let tierBadge = "🎯 Ángulo de Valor";
+      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+      if (prob >= 0.67) {
+        tier = "CANDADO";
+        tierBadge = "👑 Candado de Ponches";
+        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+      } else if (prob >= 0.60) {
+        tier = "SEGURA";
+        tierBadge = "🛡️ Apuesta Segura";
+        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+      }
+
+      pitcherCandidates.push({
+        category: "PITCHER · PONCHES",
+        title: `${p.name || p.shortName} (${team}) — Over ${line} Ponches`,
+        selection: `Over ${line} K's de ${p.name || p.shortName}`,
+        prob,
+        probPct,
+        tier,
+        tierBadge,
+        tierBg,
+        metricLabel: `Ponches Est: ${estKs.toFixed(1)} K's`,
+        subText: `Promedia ${m.k9.toFixed(1)} K/9 con proyección de ${ipEst.toFixed(1)} entradas sobre el terreno de juego.`,
+        icon: "activity",
+        order: 4
+      });
+    }
+  });
+
+  if (pitcherCandidates.length > 0) {
+    pitcherCandidates.sort((a, b) => b.prob - a.prob);
+    candidateBets.push(pitcherCandidates[0]);
+  }
+
+  // 5. Props de Bateadores (Hits, Bases Totales, Jonrones) — SOLO si hay alineación oficial confirmada
+  const isOfficialLineupAvailable = (projection.lineupSource === "MLB" || projection.lineupSource === "ESPN") &&
+    ((projection.awayLineup && projection.awayLineup.length > 0) || (projection.homeLineup && projection.homeLineup.length > 0));
+
+  if (isOfficialLineupAvailable) {
+    const allHitters = [
+      ...(projection.awayLineup || []).map(h => ({ ...h, teamName: awayName, oppPitcher: projection.model.homePitcherMetrics })),
+      ...(projection.homeLineup || []).map(h => ({ ...h, teamName: homeName, oppPitcher: projection.model.awayPitcherMetrics }))
+    ].filter(h => h.name && !h.name.includes("N/D"));
+
+    const usedPlayers = new Set();
+
+    // A) MEJOR JUGADOR PARA HITS (Exactamente 1 jugador)
+    const hitsCandidates = [...allHitters]
+      .filter(h => h.pHits1 >= 0.60)
+      .sort((a, b) => b.pHits1 - a.pHits1);
+
+    if (hitsCandidates.length > 0) {
+      const topHitsHitter = hitsCandidates[0];
+      usedPlayers.add(topHitsHitter.name);
+      const probPct = Math.round(topHitsHitter.pHits1 * 100);
+      let tier = "VALOR";
+      let tierBadge = "🎯 Ángulo de Valor";
+      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+      if (topHitsHitter.pHits1 >= 0.72) {
+        tier = "CANDADO";
+        tierBadge = "👑 Candado de Hits";
+        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+      } else if (topHitsHitter.pHits1 >= 0.65) {
+        tier = "SEGURA";
+        tierBadge = "🛡️ Apuesta Segura";
+        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+      }
+
+      const recentStr = topHitsHitter.recentAvg ? ` (ult 14J: .${Math.round(topHitsHitter.recentAvg * 1000)})` : "";
+      candidateBets.push({
+        category: "BATEADOR · HITS",
+        title: `Hits totales por jugador (${topHitsHitter.name} (${topHitsHitter.teamName}))`,
+        selection: `1+ Hit (${topHitsHitter.name})`,
+        prob: topHitsHitter.pHits1,
+        probPct,
+        tier,
+        tierBadge,
+        tierBg,
+        metricLabel: `Hits Est: ${topHitsHitter.projectedHits.toFixed(1)} H (${probPct}% prob)`,
+        subText: `AVG .${Math.round((topHitsHitter.avg || 0.245) * 1000)}${recentStr}. Promedia ${topHitsHitter.projectedHits.toFixed(1)} Hits proyectados en ${topHitsHitter.expectedPA} apariciones.`,
+        icon: "zap",
+        order: 5
+      });
+    }
+
+    // B) MEJOR JUGADOR PARA BASES TOTALES (Exactamente 1 jugador, sin repetir el de Hits)
+    const tbCandidates = [...allHitters]
+      .filter(h => !usedPlayers.has(h.name) && (h.pTB1_5 >= 0.45 || h.projectedTB >= 1.3))
+      .sort((a, b) => b.pTB1_5 - a.pTB1_5);
+
+    if (tbCandidates.length > 0) {
+      const topTbHitter = tbCandidates[0];
+      usedPlayers.add(topTbHitter.name);
+      const probPct = Math.round(topTbHitter.pTB1_5 * 100);
+      let tier = "VALOR";
+      let tierBadge = "🎯 Ángulo de Valor";
+      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+      if (topTbHitter.pTB1_5 >= 0.60) {
+        tier = "CANDADO";
+        tierBadge = "👑 Candado Extrabase";
+        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+      } else if (topTbHitter.pTB1_5 >= 0.52) {
+        tier = "SEGURA";
+        tierBadge = "🛡️ Apuesta Segura";
+        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+      }
+
+      const tbLineText = topTbHitter.pTB1_5 >= 0.50 ? "2+ Bases Totales" : "1+ Base Total";
+      candidateBets.push({
+        category: "BATEADOR · BASES TOTALES",
+        title: `Bases Totales Por Jugador (${topTbHitter.name} (${topTbHitter.teamName}))`,
+        selection: `${tbLineText} (${topTbHitter.name})`,
+        prob: topTbHitter.pTB1_5,
+        probPct,
+        tier,
+        tierBadge,
+        tierBg,
+        metricLabel: `TB Est: ${topTbHitter.projectedTB.toFixed(1)} TB (${probPct}% prob)`,
+        subText: `SLG .${Math.round((topTbHitter.slg || 0.400) * 1000)}. Proyección de ${topTbHitter.projectedTB.toFixed(1)} Bases Totales vs pitcher abridor rival.`,
+        icon: "flame",
+        order: 6
+      });
+    }
+
+    // C) MEJOR JUGADOR PARA JONRÓN (HOME RUN) (Exactamente 1 jugador, sin repetir)
+    const hrCandidates = [...allHitters]
+      .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.08)
+      .sort((a, b) => b.hrProb - a.hrProb);
+
+    if (hrCandidates.length > 0) {
+      const topHrHitter = hrCandidates[0];
+      usedPlayers.add(topHrHitter.name);
+      const probPct = Math.round(topHrHitter.hrProb * 100);
+      candidateBets.push({
+        category: "BATEADOR · JONRÓN",
+        title: `Jonrón Por Jugador (${topHrHitter.name} (${topHrHitter.teamName}))`,
+        selection: `Over 0.5 Jonrones (${topHrHitter.name})`,
+        prob: topHrHitter.hrProb,
+        probPct,
+        tier: "VALOR",
+        tierBadge: "💥 Poder Extrabase",
+        tierBg: "bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300 border-purple-300 dark:border-purple-700",
+        metricLabel: `Prob HR: ${probPct}%`,
+        subText: `Bateador de mayor poder del encuentro (${topHrHitter.homeRuns || 10} HR en la temporada) frente al lanzador rival.`,
+        icon: "sparkles",
+        order: 7
+      });
+    }
+  }
+
+  // Ordenar apuestas por categoría definida
+  candidateBets.sort((a, b) => a.order - b.order);
+
+  return candidateBets;
+}
+
+function renderBestBets(projection) {
+  const container = document.getElementById("bestBetsSection");
+  if (!container) return;
+
+  if (!projection) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const bets = calcularBestBets(projection);
+  const isOfficialLineup = (projection.lineupSource === "MLB" || projection.lineupSource === "ESPN");
+
+  const candados = bets.filter(b => b.tier === "CANDADO");
+  const seguras = bets.filter(b => b.tier === "SEGURA");
+
+  const renderBetCard = (bet) => {
+    const barWidth = `${bet.probPct}%`;
+    const barColor = bet.probPct >= 70
+      ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+      : bet.probPct >= 60
+        ? "bg-gradient-to-r from-indigo-500 to-sky-400"
+        : "bg-gradient-to-r from-amber-500 to-yellow-400";
+
+    return `
+      <div class="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-panel dark:shadow-panel-dark transition hover:border-emerald-500/50 flex flex-col justify-between">
+        <div>
+          <!-- Cabecera: Categoría e Insignia de Seguridad -->
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono">${escapeHtml(bet.category)}</span>
+            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${bet.tierBg}">
+              ${bet.tierBadge}
+            </span>
+          </div>
+
+          <!-- Título de Selección -->
+          <h4 class="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-snug tracking-tight mb-2">
+            ${escapeHtml(bet.title)}
+          </h4>
+
+          <!-- Etiqueta Métricas -->
+          <div class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-800 dark:text-slate-200 mb-3">
+            <i data-lucide="${bet.icon}" class="h-3.5 w-3.5 text-emerald-500"></i>
+            <span>${escapeHtml(bet.metricLabel)}</span>
+          </div>
+
+          <!-- Razón Sabermétrica -->
+          <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium mb-3">
+            ${escapeHtml(bet.subText)}
+          </p>
+        </div>
+
+        <!-- Barra de Probabilidad -->
+        <div>
+          <div class="flex items-center justify-between text-xs font-black mb-1">
+            <span class="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">Probabilidad Estimada</span>
+            <span class="text-slate-900 dark:text-white">${bet.probPct}%</span>
+          </div>
+          <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            <div class="h-full rounded-full ${barColor} transition-all duration-700" style="width: ${barWidth}"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const pendingNoteHtml = !isOfficialLineup
+    ? `
+      <div class="mt-4 rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center gap-2">
+        <i data-lucide="clock" class="h-4 w-4 text-amber-600 shrink-0"></i>
+        <span><strong>Alineación oficial pendiente:</strong> Los props de bateadores (Hits, Bases Totales y Jonrones por jugador) se calcularán automáticamente al confirmarse la alineación oficial (MLB/ESPN).</span>
+      </div>
+    `
+    : "";
+
+  container.innerHTML = `
+    <section class="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-5 shadow-panel dark:shadow-panel-dark mb-5">
+      <!-- Encabezado de la Sección -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-4 gap-2">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold shadow-sm">
+              <i data-lucide="target" class="h-4 w-4"></i>
+            </span>
+            <h3 class="text-base font-black uppercase tracking-wider text-slate-900 dark:text-white">🎯 Ángulos de Apuesta & Best Bets (Apuestas Más Seguras)</h3>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-0.5">
+            Selección jerarquizada: 1 Ganador, 1 Hándicap, 1 Total, 1 Ponches, y 1 Bateador destacado por mercado (Hits, Bases y Jonrón).
+          </p>
+        </div>
+        <div class="flex items-center gap-2 self-start sm:self-center shrink-0">
+          <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 px-2.5 py-1 text-xs font-bold text-emerald-800 dark:text-emerald-300">
+            👑 ${candados.length} Candados
+          </span>
+          <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-800 px-2.5 py-1 text-xs font-bold text-indigo-800 dark:text-indigo-300">
+            🛡️ ${seguras.length} Seguras
+          </span>
+        </div>
+      </div>
+
+      <!-- Grilla de Tarjetas -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        ${bets.map(renderBetCard).join("")}
+      </div>
+
+      ${pendingNoteHtml}
+    </section>
+  `;
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
 
 const MLB_TEAM_ICONIC_COLORS = {
   "boston red sox": "#bd3039",
@@ -3303,25 +3731,31 @@ function renderLineups(projection) {
         }
       }
 
-      const pBaseStr = hitter.pBase != null ? `${Math.round(hitter.pBase * 100)}%` : "-";
-      const pBaseWeight = hitter.pBase >= 0.35 ? "text-emerald-500 font-black" : (hitter.pBase < 0.26 ? "text-rose-500 font-semibold" : "font-bold text-slate-900 dark:text-white");
+      const hitsStr = hitter.projectedHits != null ? `${hitter.projectedHits.toFixed(1)} H` : "-";
+      const pHitsStr = hitter.pHits1 != null ? `${Math.round(hitter.pHits1 * 100)}%` : "-";
+      const hitsWeight = hitter.pHits1 >= 0.70 ? "text-emerald-500 font-black" : (hitter.pHits1 >= 0.62 ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-slate-800 dark:text-slate-200 font-semibold");
+
+      const tbStr = hitter.projectedTB != null ? `${hitter.projectedTB.toFixed(1)} TB` : "-";
+      const pTbStr = hitter.pTB1_5 != null ? `${Math.round(hitter.pTB1_5 * 100)}%` : "-";
+      const tbWeight = hitter.pTB1_5 >= 0.55 ? "text-indigo-500 font-black" : (hitter.pTB1_5 >= 0.45 ? "text-indigo-600 dark:text-indigo-400 font-bold" : "text-slate-800 dark:text-slate-200 font-semibold");
 
       const hrStr = hitter.hrProb != null && hitter.hrProb >= 0.005 ? `${(hitter.hrProb * 100).toFixed(1)}%` : "-";
       const hrWeight = hitter.hrProb >= 0.15 ? "text-amber-500 font-black" : "font-bold text-slate-700 dark:text-slate-200";
 
       return `
         <tr class="odd:bg-white dark:odd:bg-slate-900/10 even:bg-slate-50/50 dark:even:bg-slate-900/30 hover:bg-blue-50/50 dark:hover:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800/80 transition-colors">
-          <td class="px-3 py-2 text-center text-slate-500 dark:text-slate-400 font-bold font-mono text-xs">${bo}</td>
+          <td class="px-2.5 py-2 text-center text-slate-500 dark:text-slate-400 font-bold font-mono text-xs">${bo}</td>
           <td class="px-3 py-2 text-left font-semibold text-slate-900 dark:text-white whitespace-nowrap">
             <span class="hover:underline cursor-default">${escapeHtml(hitter.name)}</span>
             ${hitter.position ? `<span class="text-[10px] font-bold text-slate-400 dark:text-slate-500 ml-1.5 uppercase font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">${escapeHtml(hitter.position)}</span>` : ""}
           </td>
-          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${avgStr}</td>
-          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${obpStr}</td>
-          <td class="px-3 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${splitStr}</td>
-          <td class="px-3 py-2 text-center font-mono font-medium ${streakClass}">${streakStr}</td>
-          <td class="px-3 py-2 text-center font-mono text-sm ${pBaseWeight}">${pBaseStr}</td>
-          <td class="px-3 py-2 text-center font-mono text-sm ${hrWeight}">${hrStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${avgStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${obpStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${splitStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono font-medium ${streakClass}">${streakStr}</td>
+          <td class="px-3 py-2 text-center font-mono text-xs ${hitsWeight}">${hitsStr} <span class="text-[10px] opacity-80">(${pHitsStr})</span></td>
+          <td class="px-3 py-2 text-center font-mono text-xs ${tbWeight}">${tbStr} <span class="text-[10px] opacity-80">(${pTbStr})</span></td>
+          <td class="px-2.5 py-2 text-center font-mono text-xs ${hrWeight}">${hrStr}</td>
         </tr>
       `;
     }).join("");
@@ -3340,17 +3774,18 @@ function renderLineups(projection) {
           </span>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[700px] text-left text-xs">
+          <table class="w-full min-w-[760px] text-left text-xs">
             <thead class="bg-slate-50/80 dark:bg-slate-950/20 text-[10px] font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-850">
               <tr>
-                <th class="px-3 py-2 text-center w-8">#</th>
+                <th class="px-2.5 py-2 text-center w-7">#</th>
                 <th class="px-3 py-2 text-left">Bateador</th>
-                <th class="px-3 py-2 text-center w-16">AVG</th>
-                <th class="px-3 py-2 text-center w-16">OBP</th>
-                <th class="px-3 py-2 text-center w-24">Split</th>
-                <th class="px-3 py-2 text-center w-24">Racha 14J</th>
-                <th class="px-3 py-2 text-center w-20">P(Base)</th>
-                <th class="px-3 py-2 text-center w-20">HR%</th>
+                <th class="px-2.5 py-2 text-center w-14">AVG</th>
+                <th class="px-2.5 py-2 text-center w-14">OBP</th>
+                <th class="px-2.5 py-2 text-center w-20">Split</th>
+                <th class="px-2.5 py-2 text-center w-20">Racha 14J</th>
+                <th class="px-3 py-2 text-center w-24">Hits Est. (P1+H)</th>
+                <th class="px-3 py-2 text-center w-28">Bases Tot. Est. (P1.5+TB)</th>
+                <th class="px-2.5 py-2 text-center w-16">HR%</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
@@ -3471,7 +3906,7 @@ function clearResults(clearHeader = true) {
   els.summaryGrid.innerHTML = "";
   els.pitcherGrid.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 text-center text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-panel dark:shadow-panel-dark">Compara un partido para ver los abridores y sus estadisticas.</div>`;
   els.resultsBody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-700 dark:text-slate-200">Aún no hay comparación.</td></tr>`;
-  els.sourceBadge.textContent = "Sin datos";
+  if (els.bestBetsSection) els.bestBetsSection.innerHTML = "";
   const existingBullpen = document.getElementById("bullpenSection");
   if (existingBullpen) existingBullpen.innerHTML = "";
   
@@ -4713,19 +5148,6 @@ function renderAiSummaryCard(projection, summary, sourceTag) {
             </div>
             <p class="text-slate-600 dark:text-slate-300 leading-normal">${escapeHtml(summary.weatherParkText)}</p>
           </div>
-        </div>
-
-        <!-- Bloque 3: Prediction Angle / Apuesta Recomendada -->
-        <div class="rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/30 p-4">
-          <div class="flex items-center justify-between mb-1.5">
-            <h4 class="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-350 flex items-center gap-1.5">
-              <i data-lucide="target" class="h-4 w-4"></i> Prediction Angle / Apuesta Recomendada
-            </h4>
-            <span class="rounded-full bg-emerald-100 dark:bg-emerald-900/50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">Confianza ${escapeHtml(confidence)}</span>
-          </div>
-          <p class="text-xs sm:text-sm text-slate-900 dark:text-slate-100 font-bold leading-relaxed">
-            ${escapeHtml(summary.predictionAngle)}
-          </p>
         </div>
       </div>
     </section>

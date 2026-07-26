@@ -2928,86 +2928,7 @@ function calcularBestBets(projection) {
 
     const usedPlayers = new Set();
 
-    // A) MEJOR JUGADOR PARA HITS (Exactamente 1 jugador)
-    const hitsCandidates = [...allHitters]
-      .filter(h => h.pHits1 >= 0.60)
-      .sort((a, b) => b.pHits1 - a.pHits1);
-
-    if (hitsCandidates.length > 0) {
-      const topHitsHitter = hitsCandidates[0];
-      usedPlayers.add(topHitsHitter.name);
-      const probPct = Math.round(topHitsHitter.pHits1 * 100);
-      let tier = "VALOR";
-      let tierBadge = "🎯 Ángulo de Valor";
-      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (topHitsHitter.pHits1 >= 0.72) {
-        tier = "CANDADO";
-        tierBadge = "👑 Candado de Hits";
-        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
-      } else if (topHitsHitter.pHits1 >= 0.65) {
-        tier = "SEGURA";
-        tierBadge = "🛡️ Apuesta Segura";
-        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
-      }
-
-      const recentStr = topHitsHitter.recentAvg ? ` (ult 14J: .${Math.round(topHitsHitter.recentAvg * 1000)})` : "";
-      candidateBets.push({
-        category: "BATEADOR · HITS",
-        title: `Hits totales por jugador (${topHitsHitter.name} (${topHitsHitter.teamName}))`,
-        selection: `1+ Hit (${topHitsHitter.name})`,
-        prob: topHitsHitter.pHits1,
-        probPct,
-        tier,
-        tierBadge,
-        tierBg,
-        metricLabel: `Hits Est: ${topHitsHitter.projectedHits.toFixed(1)} H (${probPct}% prob)`,
-        subText: `AVG .${Math.round((topHitsHitter.avg || 0.245) * 1000)}${recentStr}. Promedia ${topHitsHitter.projectedHits.toFixed(1)} Hits proyectados en ${topHitsHitter.expectedPA} apariciones.`,
-        icon: "zap",
-        order: 5
-      });
-    }
-
-    // B) MEJOR JUGADOR PARA BASES TOTALES (Exactamente 1 jugador, sin repetir el de Hits)
-    const tbCandidates = [...allHitters]
-      .filter(h => !usedPlayers.has(h.name) && (h.pTB1_5 >= 0.45 || h.projectedTB >= 1.3))
-      .sort((a, b) => b.pTB1_5 - a.pTB1_5);
-
-    if (tbCandidates.length > 0) {
-      const topTbHitter = tbCandidates[0];
-      usedPlayers.add(topTbHitter.name);
-      const probPct = Math.round(topTbHitter.pTB1_5 * 100);
-      let tier = "VALOR";
-      let tierBadge = "🎯 Ángulo de Valor";
-      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
-      if (topTbHitter.pTB1_5 >= 0.60) {
-        tier = "CANDADO";
-        tierBadge = "👑 Candado Extrabase";
-        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
-      } else if (topTbHitter.pTB1_5 >= 0.52) {
-        tier = "SEGURA";
-        tierBadge = "🛡️ Apuesta Segura";
-        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
-      }
-
-      const tbLineText = topTbHitter.pTB1_5 >= 0.50 ? "2+ Bases Totales" : "1+ Base Total";
-      candidateBets.push({
-        category: "BATEADOR · BASES TOTALES",
-        title: `Bases Totales Por Jugador (${topTbHitter.name} (${topTbHitter.teamName}))`,
-        selection: `${tbLineText} (${topTbHitter.name})`,
-        prob: topTbHitter.pTB1_5,
-        probPct,
-        tier,
-        tierBadge,
-        tierBg,
-        metricLabel: `TB Est: ${topTbHitter.projectedTB.toFixed(1)} TB (${probPct}% prob)`,
-        subText: `SLG .${Math.round((topTbHitter.slg || 0.400) * 1000)}. Proyección de ${topTbHitter.projectedTB.toFixed(1)} Bases Totales vs pitcher abridor rival.`,
-        icon: "flame",
-        order: 6
-      });
-    }
-
-    // C) MEJOR JUGADOR PARA JONRÓN (HOME RUN) (Exactamente 1 jugador, sin repetir)
-    // Filtro estricto: Prioriza bateadores en buena racha y descarta o penaliza severamente a quienes vienen en frío ❄️
+    // A) MEJOR JUGADOR PARA JONRÓN (HOME RUN) (Se selecciona primero para reservar al mayor bateador de poder en racha)
     const hrCandidates = [...allHitters]
       .filter(h => !usedPlayers.has(h.name) && h.hrProb >= 0.07 && (h.recentAvg == null || (!h.isColdHitter && h.recentAvg >= 0.190)))
       .sort((a, b) => (b.hrScore || b.hrProb) - (a.hrScore || a.hrProb));
@@ -3047,6 +2968,84 @@ function calcularBestBets(projection) {
         subText: `Bateador de poder del encuentro (${topHrHitter.homeRuns || 10} HR en la temporada).${streakDetail} Excelente proyección frente al lanzador rival.`,
         icon: "sparkles",
         order: 7
+      });
+    }
+
+    // B) MEJOR JUGADOR PARA HITS (Exactamente 1 jugador, sin repetir)
+    const hitsCandidates = [...allHitters]
+      .filter(h => !usedPlayers.has(h.name) && h.pHits1 >= 0.60)
+      .sort((a, b) => b.pHits1 - a.pHits1);
+
+    if (hitsCandidates.length > 0) {
+      const topHitsHitter = hitsCandidates[0];
+      usedPlayers.add(topHitsHitter.name);
+      const probPct = Math.round(topHitsHitter.pHits1 * 100);
+      let tier = "VALOR";
+      let tierBadge = "🎯 Ángulo de Valor";
+      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+      if (topHitsHitter.pHits1 >= 0.72) {
+        tier = "CANDADO";
+        tierBadge = "👑 Candado de Hits";
+        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+      } else if (topHitsHitter.pHits1 >= 0.65) {
+        tier = "SEGURA";
+        tierBadge = "🛡️ Apuesta Segura";
+        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+      }
+
+      const recentStr = topHitsHitter.recentAvg ? ` (ult 14J: .${Math.round(topHitsHitter.recentAvg * 1000)})` : "";
+      candidateBets.push({
+        category: "BATEADOR · HITS",
+        title: `Hits totales por jugador (${topHitsHitter.name} (${topHitsHitter.teamName}))`,
+        selection: `1+ Hit (${topHitsHitter.name})`,
+        prob: topHitsHitter.pHits1,
+        probPct,
+        tier,
+        tierBadge,
+        tierBg,
+        metricLabel: `Hits Est: ${topHitsHitter.projectedHits.toFixed(1)} H (${probPct}% prob)`,
+        subText: `AVG .${Math.round((topHitsHitter.avg || 0.245) * 1000)}${recentStr}. Promedia ${topHitsHitter.projectedHits.toFixed(1)} Hits proyectados en ${topHitsHitter.expectedPA} apariciones.`,
+        icon: "zap",
+        order: 5
+      });
+    }
+
+    // C) MEJOR JUGADOR PARA BASES TOTALES (Exactamente 1 jugador, sin repetir los anteriores)
+    const tbCandidates = [...allHitters]
+      .filter(h => !usedPlayers.has(h.name) && (h.pTB1_5 >= 0.45 || h.projectedTB >= 1.3))
+      .sort((a, b) => b.pTB1_5 - a.pTB1_5);
+
+    if (tbCandidates.length > 0) {
+      const topTbHitter = tbCandidates[0];
+      usedPlayers.add(topTbHitter.name);
+      const probPct = Math.round(topTbHitter.pTB1_5 * 100);
+      let tier = "VALOR";
+      let tierBadge = "🎯 Ángulo de Valor";
+      let tierBg = "bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700";
+      if (topTbHitter.pTB1_5 >= 0.60) {
+        tier = "CANDADO";
+        tierBadge = "👑 Candado Extrabase";
+        tierBg = "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700";
+      } else if (topTbHitter.pTB1_5 >= 0.52) {
+        tier = "SEGURA";
+        tierBadge = "🛡️ Apuesta Segura";
+        tierBg = "bg-indigo-100 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700";
+      }
+
+      const tbLineText = topTbHitter.pTB1_5 >= 0.50 ? "2+ Bases Totales" : "1+ Base Total";
+      candidateBets.push({
+        category: "BATEADOR · BASES TOTALES",
+        title: `Bases Totales Por Jugador (${topTbHitter.name} (${topTbHitter.teamName}))`,
+        selection: `${tbLineText} (${topTbHitter.name})`,
+        prob: topTbHitter.pTB1_5,
+        probPct,
+        tier,
+        tierBadge,
+        tierBg,
+        metricLabel: `TB Est: ${topTbHitter.projectedTB.toFixed(1)} TB (${probPct}% prob)`,
+        subText: `SLG .${Math.round((topTbHitter.slg || 0.400) * 1000)}. Proyección de ${topTbHitter.projectedTB.toFixed(1)} Bases Totales vs pitcher abridor rival.`,
+        icon: "flame",
+        order: 6
       });
     }
   }

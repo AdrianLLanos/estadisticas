@@ -22,6 +22,12 @@ const LEAGUE = {
   battingAverage: 0.245,
   runsAllowedPerGame: 4.45,
   totalRunsLine: 8.5,
+  // Sabermetric constants
+  woba: 0.318,           // League average wOBA
+  cFIP: 3.10,            // FIP constant (calibrated to ERA scale)
+  babip: 0.300,          // League average BABIP for pitchers
+  homeRunRate: 0.032,    // HR per PA league average
+  fip: 4.25,             // League average FIP
 };
 
 const MLB_STADIUMS = {
@@ -749,12 +755,16 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     defenseSplit: homeTeamProfile.splits.home,
     offenseFallbackSplit: awayTeamProfile.splits.all,
     defenseFallbackSplit: homeTeamProfile.splits.all,
+    seasonOffenseRuns: fallback(awayStats?.runsPerGame || awayOffense?.runsPerGame, LEAGUE.runsPerGame),
+    seasonDefenseRuns: fallback(homeStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame),
   });
   const homeSplitBaseRuns = calcularBaseCarrerasPorSplit({
     offenseSplit: homeTeamProfile.splits.home,
     defenseSplit: awayTeamProfile.splits.away,
     offenseFallbackSplit: homeTeamProfile.splits.all,
     defenseFallbackSplit: awayTeamProfile.splits.all,
+    seasonOffenseRuns: fallback(homeStats?.runsPerGame || homeOffense?.runsPerGame, LEAGUE.runsPerGame),
+    seasonDefenseRuns: fallback(awayStats?.runsAllowedPerGame, LEAGUE.runsAllowedPerGame),
   });
   const awayRunsBase = proyectarCarrerasEquipo({
     splitBaseRuns: awaySplitBaseRuns,
@@ -763,7 +773,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     recentForm: awayForm,
     matchup: awayMatchup,
     last10Metrics: awayLast10Metrics,
-    teamSlg: awayStats?.sluggingPercentage || awayOffense?.slg,
+    teamSlg: awayStats?.slg,
+    teamSeasonRuns: awayStats?.runsPerGame,
   });
   const homeRunsBase = proyectarCarrerasEquipo({
     splitBaseRuns: homeSplitBaseRuns,
@@ -772,7 +783,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     recentForm: homeForm,
     matchup: homeMatchup,
     last10Metrics: homeLast10Metrics,
-    teamSlg: homeStats?.sluggingPercentage || homeOffense?.slg,
+    teamSlg: homeStats?.slg,
+    teamSeasonRuns: homeStats?.runsPerGame,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
   const parkFactor = obtenerParkFactor(game);
@@ -804,9 +816,50 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awayRecentRuns = awayRecent?.games?.map(g => g.runsFor);
   const homeRecentRuns = homeRecent?.games?.map(g => g.runsFor);
 
-  // Proyecciones base de carreras y hits
-  const calibratedAwayRuns = clamp(awayRuns, 1.5, 11.5);
-  const calibratedHomeRuns = clamp(homeRuns, 1.5, 11.5);
+  // === ANCLA BAYESIANA: Línea de apuestas de ESPN ===
+  // El mercado de apuestas es el predictor más eficiente (incorpora todo el contexto)
+  // Usamos la línea O/U para anclar parcialmente nuestra proyección (peso: 30%)
+  let anchoredAwayRuns = awayRuns;
+  let anchoredHomeRuns = homeRuns;
+  if (odds.overUnder && odds.overUnder > 0) {
+    const linePerTeam = odds.overUnder / 2;
+    // Si el modelo difiere mucho de la línea, el mercado tiene razón en un 30%
+    anchoredAwayRuns = awayRuns * 0.70 + linePerTeam * 0.30;
+    anchoredHomeRuns = homeRuns * 0.70 + linePerTeam * 0.30;
+  }
+
+  // === LOB% Factor: eficiencia de conversión Hits → Carreras ===
+  const awayLobFactor = awayOffense?.lobFactor ?? 1.0;
+  const homeLobFactor = homeOffense?.lobFactor ?? 1.0;
+  anchoredAwayRuns = anchoredAwayRuns * awayLobFactor;
+  anchoredHomeRuns = anchoredHomeRuns * homeLobFactor;
+
+  // === FACTOR DE CANSANCIO DEL EQUIPO ===
+  // Si el equipo llevó 7+ días seguidos sin descanso: -3% en proyección de carreras
+  const awayGames = awayRecent?.games || [];
+  const homeGames = homeRecent?.games || [];
+  const countConsecutiveGames = (games) => {
+    if (!games.length) return 0;
+    const sorted = [...games].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    let streak = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = new Date(sorted[i - 1].date);
+      const curr = new Date(sorted[i].date);
+      const diff = Math.round((prev - curr) / (1000 * 60 * 60 * 24));
+      if (diff === 1) streak++;
+      else break;
+    }
+    return streak;
+  };
+  const awayStreak = countConsecutiveGames(awayGames);
+  const homeStreak = countConsecutiveGames(homeGames);
+  const awayFatigueFactor = awayStreak >= 9 ? 0.95 : awayStreak >= 7 ? 0.97 : 1.0;
+  const homeFatigueFactor = homeStreak >= 9 ? 0.95 : homeStreak >= 7 ? 0.97 : 1.0;
+  anchoredAwayRuns = anchoredAwayRuns * awayFatigueFactor;
+  anchoredHomeRuns = anchoredHomeRuns * homeFatigueFactor;
+
+  const calibratedAwayRuns = clamp(anchoredAwayRuns, 1.5, 11.5);
+  const calibratedHomeRuns = clamp(anchoredHomeRuns, 1.5, 11.5);
   const calibratedTotalRuns = calcularTotalCarreras(calibratedAwayRuns, calibratedHomeRuns);
 
   const calibratedAwayHitsRaw = awayHits;
@@ -1065,39 +1118,81 @@ function calcularMetricasPitcher(pitcher = {}) {
   const recentRuns = Number.isFinite(recent.runsAllowedPerStart) ? recent.runsAllowedPerStart : LEAGUE.runsPerGame * 0.55;
   const recentHits = Number.isFinite(recent.hitsAllowedPerStart) ? recent.hitsAllowedPerStart : LEAGUE.hitsPerGame * 0.55;
   const hand = String(pitcher?.pitchHand || pitcher?.throws || "R").toUpperCase().startsWith("L") ? "L" : "R";
+
+  const rawEra = fallback(pitcher?.era, LEAGUE.era);
+  const rawK9 = fallback(pitcher?.k9, LEAGUE.pitcherK9);
+  const rawBb9 = fallback(pitcher?.bb9, LEAGUE.pitcherBb9);
+  const rawHr9 = fallback(pitcher?.hr9, LEAGUE.pitcherHr9);
+
+  // === FIP (Fielding Independent Pitching) ===
+  // Mide solo lo que el pitcher controla: K, BB, HR. Más predictivo que ERA.
+  const fip = innings > 0
+    ? ((13 * numberOr(pitcher?.homeRuns, (rawHr9 * innings) / 9)) +
+       (3  * numberOr(pitcher?.walks,    (rawBb9 * innings) / 9)) -
+       (2  * numberOr(pitcher?.strikeouts,(rawK9 * innings) / 9))) / innings + LEAGUE.cFIP
+    : LEAGUE.fip;
+
+  // === BABIP del Pitcher ===
+  // Si BABIP > .330 → el pitcher tuvo mala suerte (ERA inflada) → ajustar hacia abajo
+  const hits = numberOr(pitcher?.hits, (LEAGUE.pitcherHits9 * innings) / 9);
+  const hr   = numberOr(pitcher?.homeRuns, (rawHr9 * innings) / 9);
+  const k    = numberOr(pitcher?.strikeouts, (rawK9 * innings) / 9);
+  const bb   = numberOr(pitcher?.walks, (rawBb9 * innings) / 9);
+  const bfpEst = innings > 0 ? innings * 4.3 : 1;
+  const babip = bfpEst > (k + bb + hr) ? (hits - hr) / (bfpEst - k - bb - hr) : LEAGUE.babip;
+  const babipLuck = clamp((LEAGUE.babip - clamp(babip, 0.220, 0.380)) * 2.0, -0.25, 0.25);
+
+  // === ERA ajustada: mezcla ERA + FIP (60/40) con corrección de suerte BABIP ===
+  const eraBlended = rawEra * 0.60 + fip * 0.40;
+  const eraAdjusted = clamp(eraBlended - babipLuck * 0.5, 1.50, 8.50);
+
+  // === Forma Reciente: últimas salidas (si existen) ponderan 45% ===
+  const recentCount = numberOr(recent.count, 0);
+  const recentEraEst = recentCount >= 2
+    ? clamp((recentRuns / LEAGUE.runsPerGame) * LEAGUE.era, 1.50, 9.00)
+    : eraAdjusted;
+  const finalEra = recentCount >= 2
+    ? eraAdjusted * 0.55 + recentEraEst * 0.45
+    : eraAdjusted;
+
   const metrics = {
-    era: fallback(pitcher?.era, LEAGUE.era),
+    era: finalEra,
+    eraRaw: rawEra,
+    fip: clamp(fip, 1.50, 8.50),
+    babip: clamp(babip, 0.220, 0.380),
+    babipLuck,
     whip: fallback(pitcher?.whip, LEAGUE.whip),
     innings,
-    hits: numberOr(pitcher?.hits, (LEAGUE.pitcherHits9 * innings) / 9),
+    hits,
     runs: numberOr(pitcher?.runs, (LEAGUE.runsPerGame * innings) / 9),
     earnedRuns: numberOr(pitcher?.earnedRuns, (LEAGUE.era * innings) / 9),
-    strikeouts: numberOr(pitcher?.strikeouts, (LEAGUE.pitcherK9 * innings) / 9),
-    walks: numberOr(pitcher?.walks, (LEAGUE.pitcherBb9 * innings) / 9),
-    homeRuns: numberOr(pitcher?.homeRuns, (LEAGUE.pitcherHr9 * innings) / 9),
-    k9: fallback(pitcher?.k9, LEAGUE.pitcherK9),
-    bb9: fallback(pitcher?.bb9, LEAGUE.pitcherBb9),
-    hr9: fallback(pitcher?.hr9, LEAGUE.pitcherHr9),
+    strikeouts: k,
+    walks: bb,
+    homeRuns: hr,
+    k9: rawK9,
+    bb9: rawBb9,
+    hr9: rawHr9,
     hitsPerNine: fallback(pitcher?.hitsPerNine, LEAGUE.pitcherHits9),
     inningsPerStart: fallback(pitcher?.inningsPerStart, LEAGUE.starterInnings),
     wins: numberOr(pitcher?.wins, 0),
     losses: numberOr(pitcher?.losses, 0),
     throws: pitcher?.throws || pitcher?.pitchHand || "",
     hand,
-    recentStarts: numberOr(recent.count, 0),
+    recentStarts: recentCount,
     recentRuns,
     recentHits,
   };
+
+  // Score usando FIP+ERA ajustada como base principal
   const score =
-    normalizeLower(metrics.era, 2.4, 6.2) * 0.22 +
-    normalizeLower(metrics.whip, 0.95, 1.65) * 0.18 +
+    normalizeLower(finalEra, 2.4, 6.2) * 0.20 +
+    normalizeLower(metrics.fip, 2.4, 5.8) * 0.18 +
+    normalizeLower(metrics.whip, 0.95, 1.65) * 0.15 +
     normalizeHigher(metrics.k9, 5.5, 11.8) * 0.14 +
-    normalizeLower(metrics.bb9, 1.4, 5.0) * 0.1 +
-    normalizeLower(metrics.hr9, 0.55, 1.95) * 0.1 +
-    normalizeLower(metrics.hitsPerNine, 6.2, 10.8) * 0.08 +
-    normalizeHigher(metrics.inningsPerStart, 3.8, 6.6) * 0.08 +
-    normalizeLower(recentRuns, 1.1, 4.8) * 0.07 +
-    normalizeLower(recentHits, 3.4, 8.4) * 0.03;
+    normalizeLower(metrics.bb9, 1.4, 5.0) * 0.10 +
+    normalizeLower(metrics.hr9, 0.55, 1.95) * 0.10 +
+    normalizeHigher(metrics.inningsPerStart, 3.8, 6.6) * 0.07 +
+    normalizeLower(recentRuns, 1.1, 4.8) * 0.06;
 
   return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
@@ -1107,7 +1202,10 @@ function calcularOfensivaEquipo(team = {}, opponentHand = "R", last10Metrics = n
   let runsPerGame = fallback(team.runsPerGame, LEAGUE.runsPerGame);
   let hitsPerGame = fallback(team.hitsPerGame, LEAGUE.hitsPerGame);
   let slg = fallback(team.slg, LEAGUE.slg);
+  let obp = fallback(team.obp, LEAGUE.obp);
   let homeRunsPerGame = fallback(team.homeRunsPerGame, LEAGUE.homeRunsPerGame);
+  let walksPerGame = fallback(team.walksPerGame, LEAGUE.walksPerGame);
+  let battingAverage = fallback(team.battingAverage, LEAGUE.battingAverage);
 
   if (last10Metrics && last10Metrics.games > 0) {
     runsPerGame = 0.70 * runsPerGame + 0.30 * last10Metrics.runsForPerGame;
@@ -1116,26 +1214,47 @@ function calcularOfensivaEquipo(team = {}, opponentHand = "R", last10Metrics = n
     if (last10Metrics.homeRunsPerGame) homeRunsPerGame = 0.70 * homeRunsPerGame + 0.30 * last10Metrics.homeRunsPerGame;
   }
 
+  // === wOBA aproximado (Weighted On-Base Average) ===
+  // Pondera correctamente cada tipo de batazo por su valor real en carreras
+  const estPA = 38.0; // PAs estimados por juego (9 bateadores × ~4.2 PA)
+  const bbRate = clamp(walksPerGame / estPA, 0.04, 0.18);
+  const hrRate = clamp(homeRunsPerGame / estPA, 0.005, 0.12);
+  const hitRate = clamp(hitsPerGame / estPA, 0.10, 0.35);
+  const xbhRate = clamp((slg - battingAverage) * hitRate * 0.45, 0.01, 0.08); // XBH rate aprox
+  const woba = clamp(
+    0.69 * bbRate + 0.89 * (hitRate - xbhRate - hrRate) + 1.27 * xbhRate + 2.10 * hrRate,
+    0.250, 0.420
+  );
+  const wobaFactor = woba / LEAGUE.woba; // ratio vs media de liga
+
+  // === LOB% como factor de eficiencia de conversión Hits→Carreras ===
+  const lobPct = numberOr(last10Metrics?.lobPct, 70);
+  const lobFactor = lobPct > 75 ? 0.94 : lobPct < 65 ? 1.06 : 1.0;
+
   const metrics = {
     runsPerGame,
     hitsPerGame,
     ops: fallback(splitOps, fallback(team.ops, LEAGUE.ops)),
-    obp: fallback(team.obp, LEAGUE.obp),
+    obp,
     slg,
-    battingAverage: fallback(team.battingAverage, LEAGUE.battingAverage),
+    battingAverage,
     strikeoutsPerGame: fallback(team.strikeoutsPerGame, LEAGUE.strikeoutsPerGame),
-    walksPerGame: fallback(team.walksPerGame, LEAGUE.walksPerGame),
+    walksPerGame,
     homeRunsPerGame,
+    woba,
+    wobaFactor,
+    lobFactor,
   };
+
   const score =
-    normalizeHigher(metrics.runsPerGame, 3.2, 5.8) * 0.23 +
-    normalizeHigher(metrics.ops, 0.63, 0.82) * 0.2 +
-    normalizeHigher(metrics.obp, 0.285, 0.355) * 0.13 +
-    normalizeHigher(metrics.slg, 0.345, 0.47) * 0.13 +
-    normalizeHigher(metrics.hitsPerGame, 6.7, 9.8) * 0.11 +
+    normalizeHigher(metrics.runsPerGame, 3.2, 5.8) * 0.20 +
+    normalizeHigher(woba, 0.290, 0.380) * 0.18 +
+    normalizeHigher(metrics.ops, 0.63, 0.82) * 0.15 +
+    normalizeHigher(metrics.obp, 0.285, 0.355) * 0.12 +
+    normalizeHigher(metrics.slg, 0.345, 0.47) * 0.12 +
+    normalizeHigher(metrics.hitsPerGame, 6.7, 9.8) * 0.10 +
     normalizeHigher(metrics.walksPerGame, 2.4, 4.2) * 0.07 +
-    normalizeHigher(metrics.homeRunsPerGame, 0.65, 1.65) * 0.07 +
-    normalizeLower(metrics.strikeoutsPerGame, 6.6, 10.3) * 0.06;
+    normalizeHigher(metrics.homeRunsPerGame, 0.65, 1.65) * 0.06;
 
   return { ...metrics, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
@@ -1228,22 +1347,26 @@ function calcularMatchup(offense, opponentPitcher, opponentBullpen, recentForm) 
   return { score: clamp(score, 0, 1), pitcherWeakness, bullpenWeakness, label: scoreLabel(score) };
 }
 
-function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallbackSplit, defenseFallbackSplit }) {
-  const offenseRuns = firstFinite(
+function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallbackSplit, defenseFallbackSplit, seasonOffenseRuns = LEAGUE.runsPerGame, seasonDefenseRuns = LEAGUE.runsAllowedPerGame }) {
+  const recentOffenseRuns = firstFinite(
     offenseSplit?.runsForPerGame,
     offenseFallbackSplit?.runsForPerGame,
-    LEAGUE.runsPerGame
+    seasonOffenseRuns
   );
-  const defenseRunsAllowed = firstFinite(
+  const recentDefenseRunsAllowed = firstFinite(
     defenseSplit?.runsAllowedPerGame,
     defenseFallbackSplit?.runsAllowedPerGame,
-    LEAGUE.runsAllowedPerGame
+    seasonDefenseRuns
   );
+
+  // Ponderación sabermétrica: 60% temporada completa + 40% muestra reciente
+  const offenseRuns = 0.60 * seasonOffenseRuns + 0.40 * recentOffenseRuns;
+  const defenseRunsAllowed = 0.60 * seasonDefenseRuns + 0.40 * recentDefenseRunsAllowed;
 
   return clamp((offenseRuns + defenseRunsAllowed) / 2, 1.5, 11.5);
 }
 
-function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null }) {
+function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null, teamSeasonRuns = null }) {
   // Pitcher factor: starting pitcher ERA relative to league average and score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
   const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.25;
@@ -1263,14 +1386,32 @@ function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullp
   // Matchup factor
   const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.15;
 
-  let baseExpectedRuns = fallback(splitBaseRuns, LEAGUE.runsPerGame);
-  if (last10Metrics && last10Metrics.runsForPerGame) {
-    baseExpectedRuns = 0.70 * baseExpectedRuns + 0.30 * last10Metrics.runsForPerGame;
+  // BASE: usar carreras de temporada del equipo como ancla principal
+  // Si tenemos el dato de temporada completa, lo usamos con 65% de peso
+  // El splitBaseRuns (últimos juegos) aporta el 35% restante
+  let baseExpectedRuns;
+  const seasonRuns = fallback(teamSeasonRuns, 0);
+  const splitRuns = fallback(splitBaseRuns, 0);
+
+  if (seasonRuns > 0 && splitRuns > 0) {
+    // Blend: 65% temporada completa (más estable) + 35% splits recientes
+    baseExpectedRuns = 0.65 * seasonRuns + 0.35 * splitRuns;
+  } else if (seasonRuns > 0) {
+    baseExpectedRuns = seasonRuns;
+  } else if (splitRuns > 0) {
+    baseExpectedRuns = splitRuns;
+  } else {
+    baseExpectedRuns = LEAGUE.runsPerGame;
+  }
+
+  // Incorporar racha de últimos 10 si existe (peso menor: 20%)
+  if (last10Metrics && last10Metrics.runsForPerGame > 0) {
+    baseExpectedRuns = 0.80 * baseExpectedRuns + 0.20 * last10Metrics.runsForPerGame;
   }
 
   let raw = baseExpectedRuns * pitchingFactor * formFactor * matchupFactor;
 
-  // Factor de Poder / ISO: Si el SLG del equipo es mayor a 0.420, aplicar multiplicador proporcional
+  // Factor de Poder / ISO: Si el SLG del equipo es mayor a 0.420
   const slgValue = numberOr(teamSlg, 0);
   if (slgValue > 0.420) {
     raw *= (1.0 + (slgValue - 0.420) * 1.5);
@@ -2801,8 +2942,28 @@ function renderSummary(projection) {
     const desc = translateWeatherDescription(weather.description || "Clima");
     const icon = weatherIconFromDescription(desc);
     const weatherLabel = `${icon} ${weather.temperature ?? "N/D"}°C`;
-    const rainProbText = (weather.precipitationProbability !== undefined && weather.precipitationProbability !== null) ? ` · Lluvia ${weather.precipitationProbability}%` : "";
-    const weatherMeta = `${desc} · Viento ${weather.windSpeed ?? "N/D"} km/h · Humedad ${weather.humidity ?? "N/D"}%${rainProbText}`;
+    const rainProbText = (weather.precipitationProbability !== undefined && weather.precipitationProbability !== null) ? ` · 🌧️ ${weather.precipitationProbability}%` : "";
+
+    // Dirección del viento con ícono y análisis de impacto
+    let windDirText = "";
+    if (weather.windDirection) {
+      const dir = String(weather.windDirection).toLowerCase();
+      const windSpeedNum = number(weather.windSpeed);
+      const isOut = /\bout\b|s[ew]?$|s[ew][a-z]*|south/.test(dir);
+      const isIn  = /\bin\b|n[ew]?$|n[ew][a-z]*|north/.test(dir);
+      let windArrow = "💨";
+      let windImpact = "";
+      if (isOut && windSpeedNum >= 15) {
+        windArrow = "⬆️";
+        windImpact = " (↑ Over)";
+      } else if (isIn && windSpeedNum >= 15) {
+        windArrow = "⬇️";
+        windImpact = " (↓ Under)";
+      }
+      windDirText = ` · ${windArrow} ${weather.windDirection}${windImpact}`;
+    }
+
+    const weatherMeta = `${desc} · Viento ${weather.windSpeed ?? "N/D"} km/h${windDirText} · Humedad ${weather.humidity ?? "N/D"}%${rainProbText}`;
     cards.push(["Clima", weatherLabel, weatherMeta, getWeatherCardClasses(desc) + " sm:col-span-2"]);
   }
 
@@ -4487,6 +4648,21 @@ function extractEspnOdds(event) {
   };
 }
 
+function parseWindDirection(val) {
+  if (val === null || val === undefined || val === "") return "";
+  if (typeof val === "number" || (typeof val === "string" && /^\d+(\.\d+)?$/.test(val.trim()))) {
+    return degreesToCardinal(Number(val));
+  }
+  return String(val).toUpperCase().trim();
+}
+
+function degreesToCardinal(deg) {
+  if (deg === null || deg === undefined || !Number.isFinite(Number(deg))) return "";
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const index = Math.round(((Number(deg) % 360) / 45)) % 8;
+  return directions[(index + 8) % 8];
+}
+
 function extractEspnWeather(event) {
   const weather = event?.weather;
   if (!weather) return null;
@@ -4496,7 +4672,8 @@ function extractEspnWeather(event) {
   let lowTemperature = number(weather.lowTemperature);
   let windSpeed = number(weather.windSpeed || weather.wind?.speed);
   const description = weather.displayValue || weather.text || weather.shortPhrase || weather.longPhrase || "Clima disponible";
-  const windDirection = weather.wind?.direction || weather.wind?.dir || "";
+  const windDirectionRaw = weather.wind?.direction || weather.wind?.dir || weather.windDirection || "";
+  const windDirection = parseWindDirection(windDirectionRaw);
   const humidity = number(weather.humidity);
   const tempUnit = String(weather.temperatureUnit || weather.unit || weather.units?.temperature || "").toLowerCase();
 
@@ -4542,30 +4719,55 @@ function calcularImpactoClima(weather) {
   const temp = number(weather.temperature);
   const wind = number(weather.windSpeed);
   const humidity = number(weather.humidity);
+  const precProb = number(weather.precipitationProbability);
 
+  // Precipitación
   if (/rain|storm|thunder|snow|showers|drizzle|sleet|hail/.test(description)) {
     impact -= 0.45;
+  } else if (precProb >= 60) {
+    impact -= 0.25; // Alta probabilidad de lluvia aunque no esté lloviendo aún
+  } else if (precProb >= 40) {
+    impact -= 0.12;
   }
+
+  // Velocidad del viento (base)
   if (/wind|breezy|blustery/.test(description) || wind >= 25) {
     impact -= 0.18;
   } else if (wind >= 18) {
-    impact -= 0.1;
-  }
-  if (humidity >= 85 && temp >= 75) {
-    impact -= 0.08;
+    impact -= 0.10;
   }
 
-  if (temp >= 95) {
+  // === DIRECCIÓN DEL VIENTO (factor crítico en estadios abiertos) ===
+  // Viento que SALE del estadio hacia el jardín → favorece jonrones → Over
+  // Viento que ENTRA al estadio desde el jardín → penaliza jonrones → Under
+  const windDir = String(weather.windDirection || weather.wind?.direction || weather.wind?.dir || "").toLowerCase();
+  if (windDir) {
+    const isOutBlowing = /\bout\b|s[ew]?$|s[ew][a-z]*|south/.test(windDir); // S, SW, SE, "out to CF"
+    const isInBlowing = /\bin\b|n[ew]?$|n[ew][a-z]*|north/.test(windDir);   // N, NW, NE, "in from CF"
+    if (isOutBlowing && wind >= 15) {
+      impact += 0.15 + Math.min((wind - 15) * 0.008, 0.10); // Viento sale fuerte: +0.15 a +0.25
+    } else if (isInBlowing && wind >= 15) {
+      impact -= 0.12 + Math.min((wind - 15) * 0.006, 0.08); // Viento entra fuerte: -0.12 a -0.20
+    }
+  }
+
+  // Temperatura
+  if (temp >= 35) {       // > 95°F
     impact += 0.35;
-  } else if (temp >= 90) {
+  } else if (temp >= 32) { // > 90°F
     impact += 0.18;
-  } else if (temp <= 32) {
-    impact -= 0.3;
-  } else if (temp <= 40) {
+  } else if (temp <= 0) {  // <= 32°F
+    impact -= 0.30;
+  } else if (temp <= 4) {  // <= 40°F
     impact -= 0.15;
   }
 
-  return Math.max(-0.65, Math.min(0.4, impact));
+  // Humedad alta con calor extremo reduce la densidad del aire → fly balls más lejos
+  if (humidity >= 85 && temp >= 29) {
+    impact += 0.05; // Aire denso y húmedo con calor → ligero boost
+  }
+
+  return Math.max(-0.75, Math.min(0.55, impact));
 }
 
 function extractEspnTeamRecords(event) {
@@ -4673,7 +4875,7 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
   try {
     const dateUtc = new Date(gameDate);
     const startDate = dateUtc.toISOString().slice(0, 10);
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.latitude}&longitude=${stadium.longitude}&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation_probability,weathercode&start_date=${startDate}&end_date=${startDate}&timezone=UTC`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.latitude}&longitude=${stadium.longitude}&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,winddirection_10m,precipitation_probability,weathercode&start_date=${startDate}&end_date=${startDate}&timezone=UTC`;
     const data = await fetchJson(url);
     const weather = pickOpenMeteoWeather(data, dateUtc);
     if (!weather) return null;
@@ -4684,6 +4886,7 @@ async function fetchOpenMeteoWeather(venueName, gameDate) {
       lowTemperature: weather.lowTemperature,
       description: weather.description,
       windSpeed: weather.windSpeed,
+      windDirection: weather.windDirection,
       humidity: weather.humidity,
       precipitationProbability: weather.precipitationProbability,
       link: "https://open-meteo.com/",
@@ -4707,6 +4910,7 @@ function pickOpenMeteoWeather(data, dateUtc) {
   const temperatures = data?.hourly?.temperature_2m || [];
   const humidities = data?.hourly?.relativehumidity_2m || [];
   const windSpeeds = data?.hourly?.windspeed_10m || [];
+  const windDirections = data?.hourly?.winddirection_10m || [];
   const weatherCodes = data?.hourly?.weathercode || [];
   const rainProbs = data?.hourly?.precipitation_probability || [];
   if (!times.length || !temperatures.length || !humidities.length || !windSpeeds.length) return null;
@@ -4726,11 +4930,13 @@ function pickOpenMeteoWeather(data, dateUtc) {
   const highTemperature = Math.max(...temperatures);
   const lowTemperature = Math.min(...temperatures);
   const code = weatherCodes[index];
+  const windDeg = windDirections[index];
   return {
     temperature: number(temperatures[index]),
     highTemperature: number(highTemperature),
     lowTemperature: number(lowTemperature),
     windSpeed: number(windSpeeds[index]),
+    windDirection: degreesToCardinal(windDeg),
     humidity: number(humidities[index]),
     precipitationProbability: rainProbs[index] !== undefined ? number(rainProbs[index]) : null,
     description: openMeteoWeatherCodeToDescription(code),

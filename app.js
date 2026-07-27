@@ -1244,28 +1244,31 @@ function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallb
 }
 
 function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null }) {
-  // Pitcher factor: starting pitcher ERA relative to league average and their score
+  // Pitcher factor: starting pitcher ERA relative to league average and score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
-  const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.30;
-  const pitcherFactor = (pitcherEraRatio * 0.6 + pitcherScoreFactor * 0.4);
+  const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.25;
+  const starterFactor = (pitcherEraRatio * 0.6 + pitcherScoreFactor * 0.4);
 
-  // Bullpen factor: bullpen ERA relative to league average and its score
+  // Bullpen factor: bullpen ERA relative to league average and score
   const bullpenEraRatio = fallback(opponentBullpen?.era, LEAGUE.era) / LEAGUE.era;
-  const bullpenScoreFactor = 1.0 + (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.20;
-  const bullpenFactor = (bullpenEraRatio * 0.5 + bullpenScoreFactor * 0.5);
+  const bullpenScoreFactor = 1.0 + (0.5 - numberOr(opponentBullpen?.score, 0.5)) * 0.15;
+  const bullpenFactor = (bullpenEraRatio * 0.6 + bullpenScoreFactor * 0.4);
+
+  // Ponderación MLB real: Abridor lanza ~5.2 IP (58%), Bullpen lanza ~3.8 IP (42%)
+  const pitchingFactor = starterFactor * 0.58 + bullpenFactor * 0.42;
 
   // Recent form factor (residual trend)
-  const formFactor = 1.0 + (numberOr(recentForm?.score, 0.5) - 0.5) * 0.20;
+  const formFactor = 1.0 + (numberOr(recentForm?.score, 0.5) - 0.5) * 0.15;
 
   // Matchup factor
-  const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.20;
+  const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.15;
 
   let baseExpectedRuns = fallback(splitBaseRuns, LEAGUE.runsPerGame);
   if (last10Metrics && last10Metrics.runsForPerGame) {
     baseExpectedRuns = 0.70 * baseExpectedRuns + 0.30 * last10Metrics.runsForPerGame;
   }
 
-  let raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor;
+  let raw = baseExpectedRuns * pitchingFactor * formFactor * matchupFactor;
 
   // Factor de Poder / ISO: Si el SLG del equipo es mayor a 0.420, aplicar multiplicador proporcional
   const slgValue = numberOr(teamSlg, 0);

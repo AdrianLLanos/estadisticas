@@ -763,6 +763,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     recentForm: awayForm,
     matchup: awayMatchup,
     last10Metrics: awayLast10Metrics,
+    teamSlg: awayStats?.sluggingPercentage || awayOffense?.slg,
   });
   const homeRunsBase = proyectarCarrerasEquipo({
     splitBaseRuns: homeSplitBaseRuns,
@@ -771,6 +772,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     recentForm: homeForm,
     matchup: homeMatchup,
     last10Metrics: homeLast10Metrics,
+    teamSlg: homeStats?.sluggingPercentage || homeOffense?.slg,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
   const parkFactor = obtenerParkFactor(game);
@@ -803,8 +805,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const homeRecentRuns = homeRecent?.games?.map(g => g.runsFor);
 
   // Proyecciones base de carreras y hits
-  const calibratedAwayRuns = clamp(awayRuns, 2.0, 8.5);
-  const calibratedHomeRuns = clamp(homeRuns, 2.0, 8.5);
+  const calibratedAwayRuns = clamp(awayRuns, 1.5, 11.5);
+  const calibratedHomeRuns = clamp(homeRuns, 1.5, 11.5);
   const calibratedTotalRuns = calcularTotalCarreras(calibratedAwayRuns, calibratedHomeRuns);
 
   const calibratedAwayHitsRaw = awayHits;
@@ -1238,10 +1240,10 @@ function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallb
     LEAGUE.runsAllowedPerGame
   );
 
-  return clamp((offenseRuns + defenseRunsAllowed) / 2, 2.0, 8.5);
+  return clamp((offenseRuns + defenseRunsAllowed) / 2, 1.5, 11.5);
 }
 
-function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null }) {
+function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null }) {
   // Pitcher factor: starting pitcher ERA relative to league average and their score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
   const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.30;
@@ -1263,9 +1265,15 @@ function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullp
     baseExpectedRuns = 0.70 * baseExpectedRuns + 0.30 * last10Metrics.runsForPerGame;
   }
 
-  const raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor;
+  let raw = baseExpectedRuns * pitcherFactor * bullpenFactor * formFactor * matchupFactor;
 
-  return clamp(raw, 2.0, 8.5);
+  // Factor de Poder / ISO: Si el SLG del equipo es mayor a 0.420, aplicar multiplicador proporcional
+  const slgValue = numberOr(teamSlg, 0);
+  if (slgValue > 0.420) {
+    raw *= (1.0 + (slgValue - 0.420) * 1.5);
+  }
+
+  return clamp(raw, 1.5, 11.5);
 }
 
 function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScores, awayRecentRuns, homeRecentRuns }) {
@@ -1299,7 +1307,7 @@ function calcularProbabilidadGanador({ awayRuns, homeRuns, awayScores, homeScore
 }
 
 function calcularTotalCarreras(awayRuns, homeRuns) {
-  return round1(clamp(awayRuns + homeRuns, 5, 13.5));
+  return round1(clamp(awayRuns + homeRuns, 3.0, 22.0));
 }
 
 function calcularHandicap({ diff, favorite, underdog }) {
@@ -4833,14 +4841,14 @@ function proyectarHitsEquipo(team, opponent, opponentPitcher, recentForm, oppone
   const teamBA = fallback(team?.battingAverage, LEAGUE.battingAverage);
   const baFactor = teamBA / LEAGUE.battingAverage;
 
-  // Platoon split adjustment for opposing pitcher hand
+  // Platoon split adjustment for opposing pitcher hand (sensibilidad aumentada a 0.28)
   const splitFactor = opponentHand === "L" ? (fallback(team?.opsVsLeft, team?.ops) || LEAGUE.ops) / LEAGUE.ops : (fallback(team?.opsVsRight, team?.ops) || LEAGUE.ops) / LEAGUE.ops;
-  const platoonFactor = 1.0 + (splitFactor - 1.0) * 0.08;
+  const platoonFactor = 1.0 + (splitFactor - 1.0) * 0.28;
 
   // Sabermetric multiplicative projection
   let raw = baseExpectedHits * pitcherFactor * formFactor * baFactor * platoonFactor;
 
-  return clamp(raw, 5.0, 12.0);
+  return clamp(raw, 5.0, 15.0);
 }
 
 function buildExplanation(model) {
@@ -4914,7 +4922,7 @@ function poissonProbability(lambda, k) {
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
 }
 
-function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine, awayRecentRuns, homeRecentRuns) {
+function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine, awayRecentRuns, homeRecentRuns, parkFactor = 1.0) {
   let homeWinProb = 0;
   let awayWinProb = 0;
   let overProb = 0;
@@ -4922,10 +4930,10 @@ function calcularMatrizPoisson(awayRuns, homeRuns, overUnderLine, awayRecentRuns
   let homeMinus1_5Prob = 0;
   let awayMinus1_5Prob = 0;
 
-  const MAX_RUNS = 18;
+  const MAX_RUNS = 22;
 
-  const awayDist = obtenerDistribucion(awayRuns, awayRecentRuns);
-  const homeDist = obtenerDistribucion(homeRuns, homeRecentRuns);
+  const awayDist = obtenerDistribucion(awayRuns, awayRecentRuns, parkFactor);
+  const homeDist = obtenerDistribucion(homeRuns, homeRecentRuns, parkFactor);
 
   for (let a = 0; a <= MAX_RUNS; a++) {
     const pAway = evaluarProbabilidad(awayDist, a);
@@ -5245,21 +5253,31 @@ function negativeBinomialProbability(r, p, k) {
   return Math.exp(logProb);
 }
 
-function obtenerDistribucion(mean, recentValues) {
+function obtenerDistribucion(mean, recentValues, parkFactor = 1.0) {
+  let variance = mean;
+
   if (recentValues && recentValues.length >= 2) {
     const avg = average(recentValues);
     if (avg > 0) {
       const sumSqDiff = recentValues.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0);
-      const variance = sumSqDiff / (recentValues.length - 1);
-      if (variance > avg) {
-        const dispersion = variance / avg;
-        const projectedVariance = dispersion * mean;
-        const r = (mean * mean) / (projectedVariance - mean);
-        const p = (projectedVariance - mean) / projectedVariance;
-        return { type: "NegativeBinomial", r, p, mean, variance: projectedVariance };
-      }
+      const calculatedVariance = sumSqDiff / (recentValues.length - 1);
+      if (calculatedVariance > 0) variance = calculatedVariance;
     }
   }
+
+  // Expansión de varianza por Park Factor (> 1.02)
+  if (parkFactor > 1.02) {
+    variance *= (1.0 + (parkFactor - 1.0) * 1.5);
+  }
+
+  if (variance > mean) {
+    const dispersion = variance / mean;
+    const projectedVariance = dispersion * mean;
+    const r = (mean * mean) / (projectedVariance - mean);
+    const p = (projectedVariance - mean) / projectedVariance;
+    return { type: "NegativeBinomial", r, p, mean, variance: projectedVariance };
+  }
+
   return { type: "Poisson", lambda: mean, mean, variance: mean };
 }
 

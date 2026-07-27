@@ -627,12 +627,9 @@ async function compareSelectedGame() {
       }
     }
 
-    const effectiveAwayPlayers = awayLineupPlayers || getProjectedLineupFromRoster(awayRosterMap, awayStats);
-    const effectiveHomePlayers = homeLineupPlayers || getProjectedLineupFromRoster(homeRosterMap, homeStats);
-
     const [awayLineupResolved, homeLineupResolved] = await Promise.all([
-      resolveLineupStats(effectiveAwayPlayers, awayRosterMap, awayStats, season, homePitcherMetrics),
-      resolveLineupStats(effectiveHomePlayers, homeRosterMap, homeStats, season, awayPitcherMetrics),
+      awayLineupPlayers ? resolveLineupStats(awayLineupPlayers, awayRosterMap, awayStats, season, homePitcherMetrics) : null,
+      homeLineupPlayers ? resolveLineupStats(homeLineupPlayers, homeRosterMap, homeStats, season, awayPitcherMetrics) : null,
     ]);
 
     // Compute lineup offense stats and adjust team stats
@@ -2690,13 +2687,8 @@ function renderGames() {
       const lineupInfo = state.lineupStatusMap.get(game.gamePk);
       let lineupBadgeHtml = "";
       if (lineupInfo?.hasLineup) {
-        const isOfficial = lineupInfo.source === "MLB" || lineupInfo.source === "ESPN";
-        const labelText = isOfficial ? `Lineup ${lineupInfo.source} (Oficial)` : `Lineup Proyectado (Roster)`;
-        const badgeClasses = isOfficial
-          ? "text-emerald-700 dark:text-emerald-350 bg-emerald-100 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800/60"
-          : "text-sky-700 dark:text-sky-350 bg-sky-100 dark:bg-sky-950/50 border-sky-300 dark:border-sky-800/60";
-
-        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-bold ${badgeClasses} px-2 py-0.5 rounded-full border"><i data-lucide="check-circle-2" class="h-3 w-3"></i> ${labelText}</span>`;
+        const source = lineupInfo.source || "MLB";
+        lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-350 bg-emerald-100 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800/60 px-2 py-0.5 rounded-full border"><i data-lucide="check-circle-2" class="h-3 w-3"></i> Lineup ${source} (Oficial)</span>`;
       } else {
         lineupBadgeHtml = `<span class="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/50"><i data-lucide="clock" class="h-3 w-3"></i> Lineup pendiente</span>`;
       }
@@ -3317,56 +3309,19 @@ function calcularBestBets(projection) {
     });
   }
 
-  // 5. Props de Bateadores (Hits, Bases Totales, Jonrones) — Siempre disponibles pero filtrados y penalizados en duelos de picheo
-  const buildSyntheticHitters = (offenseMetrics, teamName, count = 9) => {
-    const avg  = offenseMetrics?.battingAverage || offenseMetrics?.avg || LEAGUE.battingAverage;
-    const obp  = offenseMetrics?.obp  || LEAGUE.obp;
-    const slg  = offenseMetrics?.slg  || LEAGUE.slg;
-    const hrPa = offenseMetrics?.homeRunRate || LEAGUE.homeRunRate;
-    const topPlayers = [
-      "Bateador Destacado #1", "Bateador Destacado #2", "Bateador Destacado #3",
-      "Bateador Destacado #4", "Bateador Destacado #5", "Bateador Destacado #6",
-      "Bateador Destacado #7", "Bateador Destacado #8", "Bateador Destacado #9"
-    ];
-    return Array.from({ length: count }, (_, i) => {
-      const factor = 1 - i * 0.015;
-      const pHits = clamp(1 - Math.exp(-((avg + obp) / 2 * 3.5 * factor)), 0.40, 0.90);
-      const pTB   = clamp(1 - Math.exp(-(slg * 3.5 * factor / 1.5)), 0.35, 0.85);
-      return {
-        id: `synth-${teamName}-${i}`,
-        name: topPlayers[i] || `Bateador #${i + 1}`,
-        teamName,
-        avg: avg * factor,
-        obp: obp * factor,
-        slg: slg * factor,
-        homeRuns: Math.round(12 * factor),
-        games: 80,
-        hrProb: hrPa * (1 - i * 0.05),
-        hrScore: hrPa * (1 - i * 0.05),
-        recentAvg: avg * factor,
-        projectedHits: (avg + obp) / 2 * 3.5 * factor,
-        projectedTB: slg * 3.5 * factor,
-        pHits1: pHits,
-        pHits2: pHits * 0.65,
-        pTB1_5: pTB,
-        isColdHitter: false,
-        isHotHitter: false,
-      };
-    });
-  };
-
+  // 5. Props de Bateadores (Hits, Bases Totales, Jonrones) — Disponibles solo con lineup oficial confirmado
   const rawAwayLineup = (projection.awayLineup && projection.awayLineup.length > 0)
     ? projection.awayLineup.map(h => ({ ...h, teamName: awayName })).filter(h => h && h.name)
-    : buildSyntheticHitters(projection.model?.awayOffense, awayName);
+    : [];
 
   const rawHomeLineup = (projection.homeLineup && projection.homeLineup.length > 0)
     ? projection.homeLineup.map(h => ({ ...h, teamName: homeName })).filter(h => h && h.name)
-    : buildSyntheticHitters(projection.model?.homeOffense, homeName);
+    : [];
 
   const awayHitters = rawAwayLineup.map(h => ({ ...h, teamName: awayName, role: "Visitante", icon: "✈️" }));
   const homeHitters = rawHomeLineup.map(h => ({ ...h, teamName: homeName, role: "Local", icon: "🏠" }));
 
-  if (awayHitters.length > 0 || homeHitters.length > 0) {
+  if (awayHitters.length > 0 && homeHitters.length > 0) {
 
     // A) JONRÓN DE DESTACADO POR EQUIPO
     const getBestHrHitter = (hitters, isOppDominant) => {
@@ -3710,15 +3665,6 @@ function renderBestBets(projection) {
     `;
   };
 
-  const pendingNoteHtml = !isOfficialLineup
-    ? `
-      <div class="mt-4 rounded-lg border border-sky-200 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/30 p-3 text-xs font-medium text-sky-800 dark:text-sky-300 flex items-center gap-2">
-        <i data-lucide="info" class="h-4 w-4 text-sky-600 shrink-0"></i>
-        <span><strong>Alineación proyectada (Roster):</strong> Las tarjetas de bateadores muestran proyecciones basadas en las principales figuras del equipo. Se actualizarán automáticamente al confirmarse la alineación oficial por MLB/ESPN.</span>
-      </div>
-    `
-    : "";
-
   container.innerHTML = `
     <section class="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-5 shadow-panel dark:shadow-panel-dark mb-5">
       <!-- Encabezado de la Sección -->
@@ -3748,8 +3694,6 @@ function renderBestBets(projection) {
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         ${bets.map(renderBetCard).join("")}
       </div>
-
-      ${pendingNoteHtml}
     </section>
   `;
 

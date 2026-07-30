@@ -140,13 +140,25 @@ function calcularImpactoArbitro(umpireName) {
   return { runsImpact: 0, kMultiplier: 1.0, zoneType: "Zona Estándar", name: umpireName };
 }
 
-function extractEspnUmpire(espnEvent) {
+function extractMlbUmpire(mlbBoxscore) {
+  const officials = mlbBoxscore?.officials || mlbBoxscore?.liveData?.boxscore?.officials || [];
+  const hp = officials.find(o => 
+    String(o.officialType || o.position?.displayName || o.position?.name || o.position || "").toLowerCase().includes("home")
+  );
+  if (!hp) return null;
+  return hp.official?.fullName || hp.athlete?.displayName || hp.displayName || hp.name || null;
+}
+
+function extractEspnUmpire(espnEvent, mlbBoxscore = null) {
   const officials = espnEvent?.competitions?.[0]?.officials || [];
   const hp = officials.find(o => 
     String(o.position?.displayName || o.position?.name || o.position || "").toLowerCase().includes("home")
   );
-  if (!hp) return null;
-  return hp.athlete?.displayName || hp.displayName || hp.name || null;
+  if (hp) {
+    const name = hp.athlete?.displayName || hp.displayName || hp.name || null;
+    if (name) return name;
+  }
+  return extractMlbUmpire(mlbBoxscore);
 }
 
 
@@ -738,6 +750,7 @@ async function compareSelectedGame() {
       awaySplits,
       homeSplits,
       espnEvent,
+      mlbBoxscore: lineupFeeds?.mlbBoxscore,
       weather,
     });
 
@@ -782,7 +795,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, awaySplits, homeSplits, espnEvent, weather }) {
+function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher, awayRecent, homeRecent, awaySplits, homeSplits, espnEvent, mlbBoxscore = null, weather }) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayName = shortName(awayTeam.name);
@@ -816,7 +829,7 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awaySplitMetrics = awaySplits?.away || awayTeamProfile.splits.away || null;
   const homeSplitMetrics = homeSplits?.home || homeTeamProfile.splits.home || null;
 
-  const umpireName = extractEspnUmpire(espnEvent);
+  const umpireName = extractEspnUmpire(espnEvent, mlbBoxscore);
   const umpireImpact = calcularImpactoArbitro(umpireName);
 
   const awayDefense = obtenerDefensaEquipo(awayTeam.name);
@@ -1221,18 +1234,16 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
             },
           ]
         : []),
-      ...(umpireImpact && umpireImpact.name
-        ? [
-            {
-              market: "Árbitro principal",
-              pick: umpireImpact.name,
-              estimate: umpireImpact.zoneType,
-              confidence: "Alta",
-              base: umpireImpact.runsImpact !== 0 ? `Impacto de zona: ${umpireImpact.runsImpact > 0 ? '+' : ''}${umpireImpact.runsImpact} carreras (Mult. K: ${umpireImpact.kMultiplier}x)` : "Zona de strike estándar",
-              outcome: null,
-            },
-          ]
-        : []),
+      {
+        market: "Árbitro principal",
+        pick: umpireImpact && umpireImpact.name ? umpireImpact.name : "Por confirmar",
+        estimate: umpireImpact && umpireImpact.name ? umpireImpact.zoneType : "Zona Estándar",
+        confidence: umpireImpact && umpireImpact.name ? "Alta" : "Referencia",
+        base: umpireImpact && umpireImpact.name
+          ? (umpireImpact.runsImpact !== 0 ? `Impacto de zona: ${umpireImpact.runsImpact > 0 ? '+' : ''}${umpireImpact.runsImpact} carreras (Mult. K: ${umpireImpact.kMultiplier}x)` : "Zona de strike estándar")
+          : "Árbitro no anunciado aún por MLB/ESPN. Se asume zona neutral estándar.",
+        outcome: null,
+      },
       {
         market: "Defensa de equipo",
         pick: `${awayName}: ${awayDefense.label} | ${homeName}: ${homeDefense.label}`,
@@ -3093,18 +3104,24 @@ function renderMatchupHeader(game, projection = null) {
 
   // Render metadata on the top row
   if (els.matchupMetadata) {
+    const umpireDisplay = proj?.umpireName || "Por confirmar";
     els.matchupMetadata.innerHTML = `
       <div class="flex items-center gap-1.5">
-        <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-605 dark:text-slate-300"></i>
+        <i data-lucide="clock" class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300"></i>
         <span class="font-bold text-slate-900 dark:text-white">${time}</span>
       </div>
       <div class="h-3 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block"></div>
       <div class="flex items-start gap-1.5">
-        <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-605 dark:text-slate-300 mt-0.5"></i>
+        <i data-lucide="map-pin" class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300 mt-0.5"></i>
         <div class="flex flex-col">
           <span class="font-bold uppercase tracking-wider text-slate-900 dark:text-white">${escapeHtml(venue)}</span>
           ${location ? `<span class="text-[9px] sm:text-[10px] text-slate-600 dark:text-slate-400 font-bold uppercase tracking-wider mt-0.5">${escapeHtml(location)}</span>` : ""}
         </div>
+      </div>
+      <div class="h-3 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block"></div>
+      <div class="flex items-center gap-1.5">
+        <i data-lucide="user-check" class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300"></i>
+        <span class="font-bold text-slate-900 dark:text-white">Árbitro: <span class="${proj?.umpireName ? 'text-amber-600 dark:text-amber-400 font-black' : 'text-slate-500 font-medium'}">${escapeHtml(umpireDisplay)}</span></span>
       </div>
     `;
   }

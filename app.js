@@ -69,6 +69,87 @@ const MLB_STADIUMS = {
 
 const MLB_PARK_FACTORS = Object.fromEntries(Object.entries(MLB_STADIUMS).map(([name, stadium]) => [name, stadium.parkFactor]));
 
+const MLB_UMPIRES = {
+  "Lance Barksdale":   { runsImpact:  0.40, kMultiplier: 0.91, zoneType: "Over / Zona Estrecha" },
+  "Angel Hernandez":   { runsImpact:  0.35, kMultiplier: 0.93, zoneType: "Over / Zona Inconsistente" },
+  "CB Bucknor":        { runsImpact:  0.30, kMultiplier: 0.94, zoneType: "Over / Zona Inconsistente" },
+  "Dan Bellino":       { runsImpact: -0.35, kMultiplier: 1.08, zoneType: "Under / Zona Amplia" },
+  "Pat Hoberg":        { runsImpact: -0.20, kMultiplier: 1.05, zoneType: "Precisión Elite / Neutro" },
+  "Mark Wegner":       { runsImpact: -0.30, kMultiplier: 1.07, zoneType: "Under / Zona Amplia" },
+  "Vic Carapazza":     { runsImpact:  0.25, kMultiplier: 0.95, zoneType: "Over / Zona Estrecha" },
+  "Doug Eddings":      { runsImpact:  0.30, kMultiplier: 0.93, zoneType: "Over / Zona Estrecha" },
+  "Laz Diaz":          { runsImpact:  0.25, kMultiplier: 0.94, zoneType: "Over / Zona Estrecha" },
+  "Ron Kulpa":         { runsImpact: -0.25, kMultiplier: 1.06, zoneType: "Under / Zona Amplia" },
+  "Bill Miller":       { runsImpact: -0.30, kMultiplier: 1.07, zoneType: "Under / Zona Amplia" },
+  "Jim Wolf":          { runsImpact: -0.25, kMultiplier: 1.06, zoneType: "Under / Zona Amplia" },
+  "Ted Barrett":       { runsImpact: -0.20, kMultiplier: 1.04, zoneType: "Under / Zona Amplia" },
+  "Alfonso Marquez":   { runsImpact:  0.20, kMultiplier: 0.96, zoneType: "Over / Zona Estrecha" },
+  "Nic Lentz":         { runsImpact: -0.25, kMultiplier: 1.05, zoneType: "Under / Zona Amplia" },
+};
+
+const MLB_TEAM_DEFENSE = {
+  "Toronto Blue Jays":      { drs:  32, oaa:  28, rating: 1.05, label: "Defensa Elite (+DRS)" },
+  "Milwaukee Brewers":      { drs:  35, oaa:  30, rating: 1.06, label: "Defensa Elite (+DRS)" },
+  "Cleveland Guardians":    { drs:  28, oaa:  24, rating: 1.04, label: "Defensa Excelente" },
+  "Texas Rangers":          { drs:  22, oaa:  18, rating: 1.03, label: "Defensa Fuerte" },
+  "Arizona Diamondbacks":   { drs:  20, oaa:  16, rating: 1.03, label: "Defensa Fuerte" },
+  "Atlanta Braves":         { drs:  18, oaa:  15, rating: 1.02, label: "Defensa Sobre Promedio" },
+  "Los Angeles Dodgers":    { drs:  15, oaa:  14, rating: 1.02, label: "Defensa Sobre Promedio" },
+  "Baltimore Orioles":      { drs:  14, oaa:  12, rating: 1.02, label: "Defensa Sobre Promedio" },
+  "Houston Astros":         { drs:  12, oaa:  10, rating: 1.01, label: "Defensa Solida" },
+  "Seattle Mariners":       { drs:  10, oaa:   8, rating: 1.01, label: "Defensa Solida" },
+  "San Diego Padres":       { drs:   8, oaa:   6, rating: 1.01, label: "Defensa Solida" },
+  "Tampa Bay Rays":         { drs:   6, oaa:   5, rating: 1.01, label: "Defensa Promedio" },
+  "New York Yankees":       { drs:   4, oaa:   3, rating: 1.00, label: "Defensa Promedio" },
+  "Philadelphia Phillies":  { drs:   2, oaa:   1, rating: 1.00, label: "Defensa Promedio" },
+  "Chicago Cubs":           { drs:   0, oaa:   0, rating: 1.00, label: "Defensa Promedio" },
+  "Minnesota Twins":        { drs:  -2, oaa:  -2, rating: 0.99, label: "Defensa Promedio" },
+  "San Francisco Giants":   { drs:  -4, oaa:  -3, rating: 0.99, label: "Defensa Promedio" },
+  "St. Louis Cardinals":    { drs:  -5, oaa:  -4, rating: 0.99, label: "Defensa Bajo Promedio" },
+  "Detroit Tigers":         { drs:  -8, oaa:  -6, rating: 0.98, label: "Defensa Bajo Promedio" },
+  "Boston Red Sox":         { drs: -12, oaa: -10, rating: 0.97, label: "Defensa Vulnerable" },
+  "New York Mets":          { drs: -14, oaa: -11, rating: 0.97, label: "Defensa Vulnerable" },
+  "Cincinnati Reds":        { drs: -16, oaa: -14, rating: 0.96, label: "Defensa Vulnerable" },
+  "Pittsburgh Pirates":     { drs: -18, oaa: -15, rating: 0.96, label: "Defensa Vulnerable" },
+  "Kansas City Royals":     { drs: -20, oaa: -16, rating: 0.95, label: "Defensa Débil" },
+  "Los Angeles Angels":     { drs: -22, oaa: -18, rating: 0.95, label: "Defensa Débil" },
+  "Washington Nationals":   { drs: -25, oaa: -20, rating: 0.94, label: "Defensa Deficiente (-DRS)" },
+  "Miami Marlins":          { drs: -28, oaa: -22, rating: 0.94, label: "Defensa Deficiente (-DRS)" },
+  "Colorado Rockies":       { drs: -30, oaa: -25, rating: 0.93, label: "Defensa Deficiente (-DRS)" },
+  "Chicago White Sox":      { drs: -35, oaa: -30, rating: 0.92, label: "Defensa Muy Débil (-DRS)" },
+  "Oakland Athletics":      { drs: -38, oaa: -32, rating: 0.91, label: "Defensa Muy Débil (-DRS)" },
+};
+
+function obtenerDefensaEquipo(teamName) {
+  if (!teamName) return { drs: 0, oaa: 0, rating: 1.00, label: "Defensa Promedio" };
+  if (MLB_TEAM_DEFENSE[teamName]) return MLB_TEAM_DEFENSE[teamName];
+  const norm = normalizeName(teamName || "");
+  for (const [key, val] of Object.entries(MLB_TEAM_DEFENSE)) {
+    if (normalizeName(key) === norm || norm.includes(normalizeName(key))) return val;
+  }
+  return { drs: 0, oaa: 0, rating: 1.00, label: "Defensa Promedio" };
+}
+
+function calcularImpactoArbitro(umpireName) {
+  if (!umpireName) return { runsImpact: 0, kMultiplier: 1.0, zoneType: "Neutro / No Asignado", name: "" };
+  if (MLB_UMPIRES[umpireName]) return { ...MLB_UMPIRES[umpireName], name: umpireName };
+  const norm = normalizeName(umpireName || "");
+  for (const [key, val] of Object.entries(MLB_UMPIRES)) {
+    if (normalizeName(key) === norm || norm.includes(normalizeName(key))) return { ...val, name: key };
+  }
+  return { runsImpact: 0, kMultiplier: 1.0, zoneType: "Zona Estándar", name: umpireName };
+}
+
+function extractEspnUmpire(espnEvent) {
+  const officials = espnEvent?.competitions?.[0]?.officials || [];
+  const hp = officials.find(o => 
+    String(o.position?.displayName || o.position?.name || o.position || "").toLowerCase().includes("home")
+  );
+  if (!hp) return null;
+  return hp.athlete?.displayName || hp.displayName || hp.name || null;
+}
+
+
 // Maps each stadium name to its local downloaded image file
 const STADIUM_IMAGE_MAP = {
   "Angel Stadium":                 "images/angel_stadium.jpg",
@@ -735,8 +816,20 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
   const awaySplitMetrics = awaySplits?.away || awayTeamProfile.splits.away || null;
   const homeSplitMetrics = homeSplits?.home || homeTeamProfile.splits.home || null;
 
+  const umpireName = extractEspnUmpire(espnEvent);
+  const umpireImpact = calcularImpactoArbitro(umpireName);
+
+  const awayDefense = obtenerDefensaEquipo(awayTeam.name);
+  const homeDefense = obtenerDefensaEquipo(homeTeam.name);
+
   const awayPitcherMetrics = calcularMetricasPitcher(awayPitcher);
   const homePitcherMetrics = calcularMetricasPitcher(homePitcher);
+
+  if (umpireImpact.kMultiplier !== 1.0) {
+    awayPitcherMetrics.k9 *= umpireImpact.kMultiplier;
+    homePitcherMetrics.k9 *= umpireImpact.kMultiplier;
+  }
+
   const awayOffense = calcularOfensivaEquipo(awayStats, homePitcherMetrics.hand, awayLast10Metrics);
   const homeOffense = calcularOfensivaEquipo(homeStats, awayPitcherMetrics.hand, homeLast10Metrics);
   const awayForm = calcularFormaReciente(awayRecent);
@@ -772,6 +865,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     last10Metrics: awayLast10Metrics,
     teamSlg: awayStats?.slg,
     teamSeasonRuns: awayStats?.runsPerGame,
+    opponentDefense: homeDefense,
+    umpireImpact,
   });
   const homeRunsBase = proyectarCarrerasEquipo({
     splitBaseRuns: homeSplitBaseRuns,
@@ -782,6 +877,8 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     last10Metrics: homeLast10Metrics,
     teamSlg: homeStats?.slg,
     teamSeasonRuns: homeStats?.runsPerGame,
+    opponentDefense: awayDefense,
+    umpireImpact,
   });
   const weatherAdjustment = calcularImpactoClima(weather);
   const parkFactor = obtenerParkFactor(game);
@@ -1037,6 +1134,10 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     totalHits: round1(finalTotalHits),
     weather,
     airDensity,
+    umpireName,
+    umpireImpact,
+    awayDefense,
+    homeDefense,
     monteCarlo,
     diff,
     favorite,
@@ -1120,6 +1221,26 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
             },
           ]
         : []),
+      ...(umpireImpact && umpireImpact.name
+        ? [
+            {
+              market: "Árbitro principal",
+              pick: umpireImpact.name,
+              estimate: umpireImpact.zoneType,
+              confidence: "Alta",
+              base: umpireImpact.runsImpact !== 0 ? `Impacto de zona: ${umpireImpact.runsImpact > 0 ? '+' : ''}${umpireImpact.runsImpact} carreras (Mult. K: ${umpireImpact.kMultiplier}x)` : "Zona de strike estándar",
+              outcome: null,
+            },
+          ]
+        : []),
+      {
+        market: "Defensa de equipo",
+        pick: `${awayName}: ${awayDefense.label} | ${homeName}: ${homeDefense.label}`,
+        estimate: `DRS: ${awayDefense.drs} vs ${homeDefense.drs}`,
+        confidence: "Media",
+        base: `Factor BABIP defensivo: ${awayName} ${awayDefense.rating}x, ${homeName} ${homeDefense.rating}x`,
+        outcome: null,
+      },
       {
         market: "Marcador estimado",
         pick: finalPick.marcadorEstimado,
@@ -1152,8 +1273,8 @@ function calcularMetricasPitcher(pitcher = {}) {
        (2  * numberOr(pitcher?.strikeouts,(rawK9 * innings) / 9))) / innings + LEAGUE.cFIP
     : LEAGUE.fip;
 
-  // === BABIP del Pitcher ===
-  // Si BABIP > .330 → el pitcher tuvo mala suerte (ERA inflada) → ajustar hacia abajo
+  // === xFIP (Expected Fielding Independent Pitching) & SIERA ===
+  // Reemplaza los HR reales por la tasa neutralizada de la liga (10.5% de batazos de elevado)
   const hits = numberOr(pitcher?.hits, (LEAGUE.pitcherHits9 * innings) / 9);
   const hr   = numberOr(pitcher?.homeRuns, (rawHr9 * innings) / 9);
   const k    = numberOr(pitcher?.strikeouts, (rawK9 * innings) / 9);
@@ -1162,8 +1283,21 @@ function calcularMetricasPitcher(pitcher = {}) {
   const babip = bfpEst > (k + bb + hr) ? (hits - hr) / (bfpEst - k - bb - hr) : LEAGUE.babip;
   const babipLuck = clamp((LEAGUE.babip - clamp(babip, 0.220, 0.380)) * 2.0, -0.25, 0.25);
 
-  // === ERA ajustada: mezcla ERA + FIP (60/40) con corrección de suerte BABIP ===
-  const eraBlended = rawEra * 0.60 + fip * 0.40;
+  const flyballEst = Math.max(1, (bfpEst - k - bb) * 0.35);
+  const expectedHrXfip = flyballEst * 0.105;
+  const xfip = innings > 0
+    ? ((13 * expectedHrXfip) + (3 * bb) - (2 * k)) / innings + LEAGUE.cFIP
+    : LEAGUE.fip;
+
+  const kRatePitcher = bfpEst > 0 ? k / bfpEst : 0.20;
+  const bbRatePitcher = bfpEst > 0 ? bb / bfpEst : 0.08;
+  const siera = clamp(
+    6.145 - 16.986 * kRatePitcher + 11.434 * bbRatePitcher + 7.653 * Math.pow(kRatePitcher, 2),
+    1.80, 8.20
+  );
+
+  // === ERA ajustada: trinomio ERA + FIP + xFIP (40/35/25) con corrección de suerte BABIP ===
+  const eraBlended = rawEra * 0.40 + fip * 0.35 + xfip * 0.25;
   const eraAdjusted = clamp(eraBlended - babipLuck * 0.5, 1.50, 8.50);
 
   // === Forma Reciente: últimas salidas (si existen) ponderan 45% ===
@@ -1191,6 +1325,8 @@ function calcularMetricasPitcher(pitcher = {}) {
     eraBase: finalEra,
     eraRaw: rawEra,
     fip: clamp(fip, 1.50, 8.50),
+    xfip: clamp(xfip, 1.50, 8.50),
+    siera: clamp(siera, 1.50, 8.50),
     babip: clamp(babip, 0.220, 0.380),
     babipLuck,
     ttopPenaltyFactor,
@@ -1399,7 +1535,7 @@ function calcularBaseCarrerasPorSplit({ offenseSplit, defenseSplit, offenseFallb
   return clamp((offenseRuns + defenseRunsAllowed) / 2, 1.5, 11.5);
 }
 
-function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null, teamSeasonRuns = null }) {
+function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullpen, recentForm, matchup, last10Metrics = null, teamSlg = null, teamSeasonRuns = null, opponentDefense = null, umpireImpact = null }) {
   // Pitcher factor: starting pitcher ERA relative to league average and score
   const pitcherEraRatio = fallback(opponentPitcher?.era, LEAGUE.era) / LEAGUE.era;
   const pitcherScoreFactor = 1.0 + (0.5 - numberOr(opponentPitcher?.score, 0.5)) * 0.25;
@@ -1419,15 +1555,19 @@ function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullp
   // Matchup factor
   const matchupFactor = 1.0 + (numberOr(matchup?.score, 0.5) - 0.5) * 0.15;
 
+  // Factor de Eficiencia Defensiva del Equipo (DRS / OAA)
+  const defenseRating = numberOr(opponentDefense?.rating, 1.00);
+  const defenseFactor = 1.0 / defenseRating; // Defensa Elite (1.05) reduce carreras rivales
+
+  // Ajuste por Árbitro Principal (Home Plate Umpire)
+  const umpireAdjustment = numberOr(umpireImpact?.runsImpact, 0) / 2.0;
+
   // BASE: usar carreras de temporada del equipo como ancla principal
-  // Si tenemos el dato de temporada completa, lo usamos con 65% de peso
-  // El splitBaseRuns (últimos juegos) aporta el 35% restante
   let baseExpectedRuns;
   const seasonRuns = fallback(teamSeasonRuns, 0);
   const splitRuns = fallback(splitBaseRuns, 0);
 
   if (seasonRuns > 0 && splitRuns > 0) {
-    // Blend: 65% temporada completa (más estable) + 35% splits recientes
     baseExpectedRuns = 0.65 * seasonRuns + 0.35 * splitRuns;
   } else if (seasonRuns > 0) {
     baseExpectedRuns = seasonRuns;
@@ -1437,12 +1577,11 @@ function proyectarCarrerasEquipo({ splitBaseRuns, opponentPitcher, opponentBullp
     baseExpectedRuns = LEAGUE.runsPerGame;
   }
 
-  // Incorporar racha de últimos 10 si existe (peso menor: 20%)
   if (last10Metrics && last10Metrics.runsForPerGame > 0) {
     baseExpectedRuns = 0.80 * baseExpectedRuns + 0.20 * last10Metrics.runsForPerGame;
   }
 
-  let raw = baseExpectedRuns * pitchingFactor * formFactor * matchupFactor;
+  let raw = baseExpectedRuns * pitchingFactor * formFactor * matchupFactor * defenseFactor + umpireAdjustment;
 
   // Factor de Poder / ISO: Si el SLG del equipo es mayor a 0.420
   const slgValue = numberOr(teamSlg, 0);
@@ -2072,6 +2211,18 @@ async function resolveLineupStats(lineupPlayers, rosterMap, teamStats, season, o
       effectiveAvg = 0.70 * effectiveAvg + 0.30 * stats.recentAvg;
     }
     effectiveAvg = effectiveAvg * statcast.regressionFactor;
+
+    // === Historial BvP Directo (Bateador vs Pitcher H2H) ===
+    const bvpAB = numberOr(stats.bvpAtBats, 0);
+    if (bvpAB >= 8 && Number.isFinite(stats.bvpAvg)) {
+      const bvpWeight = Math.min(0.25, bvpAB / 40.0); // Hasta 25% de peso para muestras H2H de 10+ turnos
+      effectiveAvg = (1 - bvpWeight) * effectiveAvg + bvpWeight * stats.bvpAvg;
+    }
+
+    // === Matcheo Arsenal de Pitcheo (Pitch Mix Matching) ===
+    const pitcherK9Val = numberOr(opposingPitcher?.k9, LEAGUE.pitcherK9);
+    const pitchMixFactor = pitcherK9Val >= 10.0 ? (stats.slg > 0.450 ? 1.03 : 0.95) : 1.0;
+    effectiveAvg *= pitchMixFactor;
 
     // 3. Matcheo Log5 Bill James (Bateador vs Pitcher H/9)
     const pitcherH9 = numberOr(opposingPitcher?.hitsPerNine, LEAGUE.pitcherHits9);
@@ -5795,6 +5946,8 @@ async function fetchOrSynthesizeAiSummary(projection, apiKey) {
   const mc = projection.monteCarlo;
   const mcInfoStr = mc ? `Simulación Monte Carlo (10,000 partidos): Prob Ganador ${winner === homeName ? (mc.homeWinProb * 100).toFixed(1) : (mc.awayWinProb * 100).toFixed(1)}%, F5 (1st 5 Innings) Favorito: ${mc.f5Favorite === "home" ? homeName : awayName} (${(mc.f5FavoriteProb * 100).toFixed(1)}%), Over Prob: ${(mc.overProb * 100).toFixed(1)}%.` : "";
   const airDensityStr = projection.airDensity ? `Densidad del Aire: ${projection.airDensity.density} kg/m³ (Altitud de Densidad: ${projection.airDensity.densityAltitudeFt} ft, Multiplicador de vuelo: ${projection.airDensity.dragReductionMultiplier}x).` : "";
+  const umpireStr = projection.umpireName ? `Árbitro Principal: ${projection.umpireName} (${projection.umpireImpact?.zoneType || "Zona Estándar"}).` : "Árbitro Estándar.";
+  const defenseStr = `Defensa: ${awayName} (${projection.awayDefense?.label || "Promedio"}), ${homeName} (${projection.homeDefense?.label || "Promedio"}).`;
 
   if (apiKey) {
     try {

@@ -275,6 +275,7 @@ const els = {
   clearGeminiKeyBtn: document.querySelector("#clearGeminiKeyBtn"),
   aiSummarySection: document.querySelector("#aiSummarySection"),
   bestBetsSection: document.querySelector("#bestBetsSection"),
+  h2hSection: document.querySelector("#h2hSection"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -673,7 +674,8 @@ async function compareSelectedGame() {
       homeBullpenRoster,
       lineupFeeds,
       awayRosterMap,
-      homeRosterMap
+      homeRosterMap,
+      h2hData
     ] = await Promise.all([
       getTeamStats(away.id),
       getTeamStats(home.id),
@@ -689,6 +691,7 @@ async function compareSelectedGame() {
       fetchLineupData(game.gamePk, espnEvent?.id),
       fetchRosterHittingStats(away.id, season),
       fetchRosterHittingStats(home.id, season),
+      fetchH2hGames(away.id, home.id, referenceDate),
     ]);
 
     const awayPitcher = mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher);
@@ -759,6 +762,7 @@ async function compareSelectedGame() {
     projection.awayLineup = awayLineupResolved;
     projection.homeLineup = homeLineupResolved;
     projection.lineupSource = lineupSource;
+    projection.h2h = h2hData;
 
     state.activeProjection = projection;
 
@@ -782,6 +786,7 @@ async function compareSelectedGame() {
     renderPitchers(projection);
     renderLineups(projection);
     renderBullpens(projection);
+    renderH2H(projection);
     renderTeamStats(projection);
     renderResults(projection);
     renderPredictor(projection);
@@ -4237,6 +4242,265 @@ function renderPitchers(projection) {
       </div>
     </section>
   `;
+}
+
+async function fetchH2hGames(awayTeamId, homeTeamId, referenceDate) {
+  if (!awayTeamId || !homeTeamId) return null;
+  
+  const refDateObj = referenceDate ? new Date(referenceDate) : new Date();
+  const refYear = Number.isFinite(refDateObj.getFullYear()) ? refDateObj.getFullYear() : new Date().getFullYear();
+  
+  // Generate list of 10 seasons back from refYear
+  const seasons = [];
+  for (let y = refYear; y >= refYear - 9; y--) {
+    seasons.push(y);
+  }
+  
+  const seasonsParam = seasons.join(",");
+  const endDate = referenceDate || toDateInputValue(new Date());
+
+  const url = `${MLB_BASE}/schedule?sportId=1&teamId=${awayTeamId}&opponentId=${homeTeamId}&season=${seasonsParam}&gameTypes=R,F,D,L,W,E,S&hydrate=team,linescore`;
+
+  try {
+    const data = await fetchJson(url);
+    const rawGames = (data?.dates || []).flatMap((d) => d.games || []);
+    
+    // Filter completed games (Final) up to referenceDate
+    const completedGames = rawGames.filter((g) => {
+      const isFinal = g.status?.codedGameState === "F" || g.status?.abstractGameState === "Final";
+      const gDate = g.officialDate || (g.gameDate ? g.gameDate.slice(0, 10) : "");
+      const isPast = !endDate || gDate <= endDate;
+      return isFinal && isPast;
+    });
+
+    // Sort descending by date (most recent first)
+    completedGames.sort((a, b) => {
+      const dateA = a.officialDate || (a.gameDate ? a.gameDate.slice(0, 10) : "");
+      const dateB = b.officialDate || (b.gameDate ? b.gameDate.slice(0, 10) : "");
+      return String(dateB).localeCompare(String(dateA));
+    });
+
+    // Take last 10 games
+    const last10 = completedGames.slice(0, 10);
+    if (!last10.length) return null;
+
+    let totalRunsSum = 0;
+    let awayTeamRunsSum = 0;
+    let homeTeamRunsSum = 0;
+
+    const parsedGames = last10.map((g) => {
+      const gAwayId = g.teams?.away?.team?.id;
+      const gAwayName = g.teams?.away?.team?.name || "Visitante";
+      const gAwayScore = number(g.teams?.away?.score);
+
+      const gHomeId = g.teams?.home?.team?.id;
+      const gHomeName = g.teams?.home?.team?.name || "Local";
+      const gHomeScore = number(g.teams?.home?.score);
+
+      const gameTotalRuns = gAwayScore + gHomeScore;
+      totalRunsSum += gameTotalRuns;
+
+      // Track current away team runs and current home team runs
+      const currentAwayRuns = gAwayId === awayTeamId ? gAwayScore : gHomeScore;
+      const currentHomeRuns = gHomeId === homeTeamId ? gHomeScore : gAwayScore;
+
+      awayTeamRunsSum += currentAwayRuns;
+      homeTeamRunsSum += currentHomeRuns;
+
+      return {
+        gamePk: g.gamePk,
+        date: g.officialDate || (g.gameDate ? g.gameDate.slice(0, 10) : ""),
+        awayName: gAwayName,
+        awayScore: gAwayScore,
+        awayId: gAwayId,
+        homeName: gHomeName,
+        homeScore: gHomeScore,
+        homeId: gHomeId,
+        totalRuns: gameTotalRuns,
+        winnerId: gAwayScore > gHomeScore ? gAwayId : (gHomeScore > gAwayScore ? gHomeId : null),
+      };
+    });
+
+    const count = parsedGames.length;
+    const avgTotalRuns = count > 0 ? totalRunsSum / count : 0;
+    const avgAwayTeamRuns = count > 0 ? awayTeamRunsSum / count : 0;
+    const avgHomeTeamRuns = count > 0 ? homeTeamRunsSum / count : 0;
+
+    return {
+      games: parsedGames,
+      count,
+      avgTotalRuns: round1(avgTotalRuns),
+      avgAwayTeamRuns: round1(avgAwayTeamRuns),
+      avgHomeTeamRuns: round1(avgHomeTeamRuns),
+    };
+  } catch (err) {
+    console.warn("Error consultando historial H2H:", err);
+    return null;
+  }
+}
+
+function formatDateReadable(dateStr) {
+  if (!dateStr) return "";
+  try {
+    const parts = dateStr.split("-");
+    if (parts.length === 3) {
+      const year = parts[0];
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+      return `${day} ${months[month]} ${year}`;
+    }
+  } catch (e) {}
+  return dateStr;
+}
+
+function renderH2H(projection) {
+  if (!els.h2hSection) return;
+  const h2h = projection?.h2h;
+
+  if (!h2h || !h2h.games || !h2h.games.length) {
+    els.h2hSection.innerHTML = `
+      <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 shadow-panel dark:shadow-panel-dark">
+        <div class="flex items-center gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <i data-lucide="swords" class="h-4 w-4 text-emerald-600 dark:text-emerald-400"></i>
+          <h3 class="text-sm font-bold uppercase tracking-wide text-slate-800 dark:text-slate-200">Historial Directo (H2H)</h3>
+        </div>
+        <p class="mt-4 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">No se encontraron enfrentamientos directos recientes en las últimas 3 temporadas.</p>
+      </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+    return;
+  }
+
+  const awayName = projection.awayName;
+  const homeName = projection.homeName;
+  const awayLogo = mlbTeamLogoUrl(projection.game.teams.away.team.id);
+  const homeLogo = mlbTeamLogoUrl(projection.game.teams.home.team.id);
+
+  const summaryCardsHtml = `
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+      <!-- Media General -->
+      <div class="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/50 p-3.5 shadow-xs">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <i data-lucide="calculator" class="h-5 w-5"></i>
+        </div>
+        <div>
+          <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Media General (Total)</span>
+          <div class="flex items-baseline gap-1.5 mt-0.5">
+            <span class="text-xl font-extrabold text-slate-900 dark:text-white font-sports">${h2h.avgTotalRuns.toFixed(1)}</span>
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">carreras / juego</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Media Visitante -->
+      <div class="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/50 p-3.5 shadow-xs">
+        <img src="${awayLogo}" alt="${awayName}" class="h-8 w-8 object-contain img-smooth shrink-0" onerror="this.style.display='none'" />
+        <div>
+          <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Media ${escapeHtml(awayName)}</span>
+          <div class="flex items-baseline gap-1.5 mt-0.5">
+            <span class="text-xl font-extrabold text-slate-900 dark:text-white font-sports">${h2h.avgAwayTeamRuns.toFixed(1)}</span>
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">carreras / juego</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Media Local -->
+      <div class="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/50 p-3.5 shadow-xs">
+        <img src="${homeLogo}" alt="${homeName}" class="h-8 w-8 object-contain img-smooth shrink-0" onerror="this.style.display='none'" />
+        <div>
+          <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Media ${escapeHtml(homeName)}</span>
+          <div class="flex items-baseline gap-1.5 mt-0.5">
+            <span class="text-xl font-extrabold text-slate-900 dark:text-white font-sports">${h2h.avgHomeTeamRuns.toFixed(1)}</span>
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">carreras / juego</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const rowsHtml = h2h.games.map((g) => {
+    const formattedDate = formatDateReadable(g.date);
+    const awayIsWinner = g.awayScore > g.homeScore;
+    const homeIsWinner = g.homeScore > g.awayScore;
+
+    const awayScoreBadge = awayIsWinner
+      ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-black bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">${g.awayScore}</span>`
+      : `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold text-slate-600 dark:text-slate-400">${g.awayScore}</span>`;
+
+    const homeScoreBadge = homeIsWinner
+      ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-black bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">${g.homeScore}</span>`
+      : `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold text-slate-600 dark:text-slate-400">${g.homeScore}</span>`;
+
+    return `
+      <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+        <td class="px-4 py-2.5 text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="calendar" class="h-3.5 w-3.5 text-slate-400"></i>
+            <span>${formattedDate}</span>
+          </div>
+        </td>
+        <td class="px-4 py-2.5 text-xs font-bold text-slate-900 dark:text-white">
+          <div class="flex items-center justify-between gap-3 max-w-sm">
+            <div class="flex items-center gap-2 ${awayIsWinner ? 'font-black text-slate-900 dark:text-white' : 'font-medium text-slate-600 dark:text-slate-400'}">
+              <span>${escapeHtml(g.awayName)}</span>
+              ${awayScoreBadge}
+            </div>
+            <span class="text-[11px] font-semibold text-slate-400">vs</span>
+            <div class="flex items-center gap-2 ${homeIsWinner ? 'font-black text-slate-900 dark:text-white' : 'font-medium text-slate-600 dark:text-slate-400'}">
+              ${homeScoreBadge}
+              <span>${escapeHtml(g.homeName)}</span>
+            </div>
+          </div>
+        </td>
+        <td class="px-4 py-2.5 text-xs font-extrabold text-right text-slate-900 dark:text-white font-sports text-sm">
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono">
+            <i data-lucide="hash" class="h-3 w-3 text-slate-400"></i>
+            ${g.totalRuns} carreras
+          </span>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  els.h2hSection.innerHTML = `
+    <div class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-4 sm:p-5 shadow-panel dark:shadow-panel-dark">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-4 border-b border-slate-100 dark:border-slate-800 gap-2">
+        <div class="flex items-center gap-2">
+          <div class="p-1.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <i data-lucide="swords" class="h-4 w-4"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold uppercase tracking-wide text-slate-800 dark:text-slate-200">Historial Directo (H2H)</h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Últimos ${h2h.count} enfrentamientos entre ambos equipos</p>
+          </div>
+        </div>
+        <span class="inline-flex items-center gap-1.5 self-start sm:self-auto rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 px-3 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-350">
+          <i data-lucide="history" class="h-3.5 w-3.5"></i>
+          ${h2h.count} Duelos Encontrados
+        </span>
+      </div>
+
+      ${summaryCardsHtml}
+
+      <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-50 dark:bg-slate-950/80 text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+            <tr>
+              <th class="px-4 py-2.5 font-bold">Fecha</th>
+              <th class="px-4 py-2.5 font-bold">Enfrentamiento y Resultado</th>
+              <th class="px-4 py-2.5 font-bold text-right">Total Carreras</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60 bg-white dark:bg-slate-900/30">
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  if (window.lucide) window.lucide.createIcons();
 }
 
 function renderTeamStats(projection) {

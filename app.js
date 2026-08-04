@@ -4220,7 +4220,7 @@ function renderPitchers(projection) {
       </div>
 
       <div class="overflow-x-auto border-t border-slate-100 dark:border-slate-800">
-        <table class="w-full min-w-[680px] text-left text-xs">
+        <table class="w-full min-w-[740px] text-left text-xs">
           <thead class="bg-slate-50 dark:bg-slate-900/80 text-[11px] font-black uppercase tracking-wide text-slate-850 dark:text-slate-200 border-b border-slate-200 dark:border-slate-800">
             <tr>
               <th class="px-3 py-2">Jugador</th>
@@ -4229,6 +4229,8 @@ function renderPitchers(projection) {
               <th class="px-3 py-2 text-center">WHIP</th>
               <th class="px-3 py-2 text-center">IP</th>
               <th class="px-3 py-2 text-center">H</th>
+              <th class="px-3 py-2 text-center" title="Carreras Permitidas Totales">R</th>
+              <th class="px-3 py-2 text-center" title="Carreras Limpias Permitidas">ER</th>
               <th class="px-3 py-2 text-center">K</th>
               <th class="px-3 py-2 text-center">BB</th>
               <th class="px-3 py-2 text-center">HR</th>
@@ -4845,13 +4847,40 @@ function renderLineups(projection) {
   const awayColor = getTeamColor(projection.awayColor, false, projection.awayAlternateColor, awayTeam.name, projection.awayAbbreviation);
   const homeColor = getTeamColor(projection.homeColor, true, projection.homeAlternateColor, homeTeam.name, projection.homeAbbreviation);
 
+  const getHitterStatColor = (val, type) => {
+    if (val == null || !Number.isFinite(val) || val <= 0) {
+      return "text-slate-400 dark:text-slate-500 font-medium";
+    }
+    if (type === "avg") {
+      if (val >= 0.265) return "text-emerald-600 dark:text-emerald-400 font-bold";
+      if (val < 0.235) return "text-rose-500 dark:text-rose-400 font-bold";
+      return "text-slate-600 dark:text-slate-400 font-medium";
+    }
+    if (type === "obp") {
+      if (val >= 0.335) return "text-emerald-600 dark:text-emerald-400 font-bold";
+      if (val < 0.305) return "text-rose-500 dark:text-rose-400 font-bold";
+      return "text-slate-600 dark:text-slate-400 font-medium";
+    }
+    if (type === "slg") {
+      if (val >= 0.430) return "text-emerald-600 dark:text-emerald-400 font-bold";
+      if (val < 0.380) return "text-rose-500 dark:text-rose-400 font-bold";
+      return "text-slate-600 dark:text-slate-400 font-medium";
+    }
+    return "text-slate-600 dark:text-slate-400 font-medium";
+  };
+
   const buildTeamLineupTable = (teamName, teamLogo, opponentHandText, lineupResolved, teamColor) => {
     const rowsHtml = lineupResolved.map((hitter, index) => {
       const bo = index + 1;
       
       const avgStr = hitter.avg != null && hitter.avg > 0 ? hitter.avg.toFixed(3) : "-";
       const obpStr = hitter.obp != null && hitter.obp > 0 ? hitter.obp.toFixed(3) : "-";
+      const slgStr = hitter.slg != null && hitter.slg > 0 ? hitter.slg.toFixed(3) : "-";
       const splitStr = hitter.splitLabel || "-";
+
+      const avgClass = getHitterStatColor(hitter.avg, "avg");
+      const obpClass = getHitterStatColor(hitter.obp, "obp");
+      const slgClass = getHitterStatColor(hitter.slg, "slg");
       
       let streakStr = "-";
       let streakClass = "";
@@ -4885,8 +4914,9 @@ function renderLineups(projection) {
             <span class="hover:underline cursor-default">${escapeHtml(hitter.name)}</span>
             ${hitter.position ? `<span class="text-[10px] font-bold text-slate-400 dark:text-slate-500 ml-1.5 uppercase font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">${escapeHtml(hitter.position)}</span>` : ""}
           </td>
-          <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${avgStr}</td>
-          <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${obpStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono ${avgClass}">${avgStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono ${obpClass}">${obpStr}</td>
+          <td class="px-2.5 py-2 text-center font-mono ${slgClass}">${slgStr}</td>
           <td class="px-2.5 py-2 text-center font-mono font-medium text-slate-800 dark:text-slate-200">${splitStr}</td>
           <td class="px-2.5 py-2 text-center font-mono font-medium ${streakClass}">${streakStr}</td>
           <td class="px-3 py-2 text-center font-mono text-xs ${hitsWeight}">${hitsStr} <span class="text-[10px] opacity-80">(${pHitsStr})</span></td>
@@ -4910,13 +4940,14 @@ function renderLineups(projection) {
           </span>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[760px] text-left text-xs">
+          <table class="w-full min-w-[800px] text-left text-xs">
             <thead class="bg-slate-50/80 dark:bg-slate-950/20 text-[10px] font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-850">
               <tr>
                 <th class="px-2.5 py-2 text-center w-7">#</th>
                 <th class="px-3 py-2 text-left">Bateador</th>
                 <th class="px-2.5 py-2 text-center w-14">AVG</th>
                 <th class="px-2.5 py-2 text-center w-14">OBP</th>
+                <th class="px-2.5 py-2 text-center w-14">SLG</th>
                 <th class="px-2.5 py-2 text-center w-20">Split</th>
                 <th class="px-2.5 py-2 text-center w-20">Racha 14J</th>
                 <th class="px-3 py-2 text-center w-24">Hits Est. (P1+H)</th>
@@ -4937,7 +4968,7 @@ function renderLineups(projection) {
     <div class="mb-4">
       <h2 class="text-base font-black uppercase tracking-wide text-slate-900 dark:text-white">Análisis de Bateadores vs Pitcher Abridor</h2>
       <p class="text-xs text-slate-600 dark:text-slate-400 font-semibold leading-relaxed mt-0.5">
-        OBP de temporada, splits vs zurdo/derecho, racha reciente (14J) y probabilidad de jonrón estimada vs pitcher abridor.
+        Métricas de bateo (AVG, OBP, SLG), splits vs zurdo/derecho, racha reciente (14J) y proyecciones estimadas vs pitcher abridor.
         <span class="text-emerald-600 dark:text-emerald-450 font-bold">(Lineups confirmados vía ${projection.lineupSource})</span>
       </p>
       <div class="mt-2.5 border-t border-dotted border-slate-200 dark:border-slate-800"></div>
@@ -4984,24 +5015,61 @@ function pitcherHeadshot(pitcher, align) {
   `;
 }
 
+function getPitcherStatColor(val, ip, statType) {
+  if (val == null || !Number.isFinite(val)) return "text-slate-700 dark:text-slate-300 font-medium";
+
+  if (statType === "era") {
+    if (val <= 3.50) return "text-emerald-600 dark:text-emerald-400 font-bold";
+    if (val >= 4.70) return "text-rose-600 dark:text-rose-400 font-bold";
+    return "text-slate-600 dark:text-slate-400 font-medium";
+  }
+
+  if (statType === "whip") {
+    if (val <= 1.18) return "text-emerald-600 dark:text-emerald-400 font-bold";
+    if (val >= 1.40) return "text-rose-600 dark:text-rose-400 font-bold";
+    return "text-slate-600 dark:text-slate-400 font-medium";
+  }
+
+  if (statType === "runs" || statType === "er") {
+    if (!ip || ip < 3.0) return "text-slate-600 dark:text-slate-400 font-medium";
+    const per9Rate = (val / ip) * 9.0;
+    if (per9Rate <= 3.50) return "text-emerald-600 dark:text-emerald-400 font-bold";
+    if (per9Rate >= 4.70) return "text-rose-600 dark:text-rose-400 font-bold";
+    return "text-slate-600 dark:text-slate-400 font-medium";
+  }
+
+  return "text-slate-700 dark:text-slate-300";
+}
+
 function pitcherTableRow(pitcher) {
   if (!pitcher) {
     return `
       <tr class="bg-slate-50 dark:bg-slate-900/40">
         <td class="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Abridor N/D</td>
-        <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-205" colspan="8">ESPN no publico datos del lanzador probable.</td>
+        <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-205" colspan="11">ESPN no publico datos del lanzador probable.</td>
       </tr>
     `;
   }
+
+  const runsVal = pitcher.runs != null ? pitcher.runs : (pitcher.stats?.runs != null ? pitcher.stats.runs : null);
+  const erVal = pitcher.earnedRuns != null ? pitcher.earnedRuns : (pitcher.stats?.earnedRuns != null ? pitcher.stats.earnedRuns : null);
+  const ip = Number.isFinite(pitcher.innings) && pitcher.innings > 0 ? pitcher.innings : null;
+
+  const eraClass = getPitcherStatColor(pitcher.era, ip, "era");
+  const whipClass = getPitcherStatColor(pitcher.whip, ip, "whip");
+  const runsClass = getPitcherStatColor(runsVal, ip, "runs");
+  const erClass = getPitcherStatColor(erVal, ip, "er");
 
   return `
     <tr class="odd:bg-white dark:odd:bg-slate-900/20 even:bg-slate-50 dark:even:bg-slate-900/40 hover:bg-blue-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
       <td class="px-3 py-2 font-semibold text-sky-850 dark:text-sky-300">${escapeHtml(pitcher.name)}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatWinLoss(pitcher))}</td>
-      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatStat(pitcher.era, 2))}</td>
-      <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
+      <td class="px-3 py-2 text-center font-mono ${eraClass}">${escapeHtml(formatStat(pitcher.era, 2))}</td>
+      <td class="px-3 py-2 text-center font-mono ${whipClass}">${escapeHtml(formatStat(pitcher.whip, 2))}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(pitcher.inningsDisplay || formatStat(pitcher.innings, 1))}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.hits))}</td>
+      <td class="px-3 py-2 text-center font-mono ${runsClass}">${escapeHtml(formatNullable(runsVal))}</td>
+      <td class="px-3 py-2 text-center font-mono ${erClass}">${escapeHtml(formatNullable(erVal))}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.strikeouts))}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.walks))}</td>
       <td class="px-3 py-2 text-center text-slate-850 dark:text-slate-100">${escapeHtml(formatNullable(pitcher.homeRuns))}</td>

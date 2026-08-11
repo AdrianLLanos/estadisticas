@@ -1130,9 +1130,15 @@ function buildProjection({ game, awayStats, homeStats, awayPitcher, homePitcher,
     homeForm,
     awayBullpen,
     homeBullpen,
+    awayLocalia,
+    homeLocalia,
     weather,
     odds,
     totalRuns: calibratedTotalRuns,
+    awayRuns: calibratedAwayRuns,
+    homeRuns: calibratedHomeRuns,
+    favoriteSide: probability.favorite,
+    winProbability,
     monteCarlo,
     airDensity,
   });
@@ -5802,6 +5808,28 @@ function buildExplanation(model) {
   const offenseEdge = model.homeOffense.score - model.awayOffense.score;
   const formEdge = model.homeForm.score - model.awayForm.score;
   const bullpenEdge = model.homeBullpen.score - model.awayBullpen.score;
+  const localiaEdge = model.homeLocalia.score - model.awayLocalia.score;
+  const favoriteSide = model.favoriteSide || (model.homeRuns >= model.awayRuns ? "home" : "away");
+  const favoriteName = favoriteSide === "home" ? model.homeName : model.awayName;
+  const rivalName = favoriteSide === "home" ? model.awayName : model.homeName;
+  const edgeLabel = model.winProbability < 0.55 ? "leve" : model.winProbability < 0.62 ? "moderado" : "claro";
+  const metricEdges = [
+    { value: pitcherEdge, homeText: "abridor", awayText: "abridor" },
+    { value: offenseEdge, homeText: "ofensiva", awayText: "ofensiva" },
+    { value: formEdge, homeText: "forma reciente", awayText: "forma reciente" },
+    { value: bullpenEdge, homeText: "bullpen", awayText: "bullpen" },
+    { value: localiaEdge, homeText: "localía", awayText: "localía" },
+  ];
+  const advantagesFor = (side) => metricEdges
+    .filter((metric) => Math.abs(metric.value) >= 0.04 && ((side === "home" && metric.value > 0) || (side === "away" && metric.value < 0)))
+    .map((metric) => side === "home" ? metric.homeText : metric.awayText);
+  const favoriteAdvantages = advantagesFor(favoriteSide);
+  const rivalAdvantages = advantagesFor(favoriteSide === "home" ? "away" : "home");
+  const scoreContext = `${favoriteName} proyecta ${favoriteSide === "home" ? model.homeRuns.toFixed(1) : model.awayRuns.toFixed(1)} carreras frente a ${(favoriteSide === "home" ? model.awayRuns : model.homeRuns).toFixed(1)} de ${rivalName}`;
+  const summaryParts = [`${favoriteName} es favorito ${edgeLabel} (${Math.round(model.winProbability * 100)}%).`];
+  if (rivalAdvantages.length) summaryParts.push(`${rivalName} tiene ventaja en ${rivalAdvantages.join(" y ")}, pero ${scoreContext}.`);
+  else summaryParts.push(`${scoreContext}.`);
+  if (favoriteAdvantages.length) summaryParts.push(`${favoriteName} también compensa con ${favoriteAdvantages.join(" y ")}.`);
   const factors = [
     `${model.awayName} ${scorePercent(model.awayPitcherMetrics.score)} vs ${model.homeName} ${scorePercent(model.homePitcherMetrics.score)} en abridores`,
     `Ofensiva: ${model.awayName} ${scorePercent(model.awayOffense.score)}, ${model.homeName} ${scorePercent(model.homeOffense.score)}`,
@@ -5823,7 +5851,8 @@ function buildExplanation(model) {
     .slice(0, 2)
     .map(([, text]) => text);
 
-  if (leaders.length) factors.unshift(`Factores principales: ${leaders.join("; ")}.`);
+  factors.unshift(summaryParts.join(" "));
+  if (leaders.length) factors.splice(1, 0, `Factores comparativos: ${leaders.join("; ")}.`);
   if (model.odds.overUnder) factors.push(`Total proyectado ${model.totalRuns.toFixed(1)} contra linea ESPN ${model.odds.overUnder}.`);
   return factors;
 }

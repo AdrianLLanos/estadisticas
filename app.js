@@ -232,6 +232,9 @@ function setStadiumBackground(venueName) {
 }
 
 const LINEUP_POLL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos
+const CALIBRATION_STORAGE_KEY = "mlb-calibration-records-v1";
+const MAX_CALIBRATION_RECORDS = 6000;
+const CALIBRATION_RECONCILE_INTERVAL_MS = 30 * 60 * 1000;
 
 const state = {
   games: [],
@@ -245,6 +248,7 @@ const state = {
   lineupStatusMap: new Map(),
   lineupPollTimer: null,
   isPollingLineups: false,
+  calibrationRecords: [],
 };
 
 const els = {
@@ -276,9 +280,14 @@ const els = {
   aiSummarySection: document.querySelector("#aiSummarySection"),
   bestBetsSection: document.querySelector("#bestBetsSection"),
   h2hSection: document.querySelector("#h2hSection"),
+  calibrationSection: document.querySelector("#calibrationSection"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.calibrationRecords = loadCalibrationRecords();
+  renderCalibrationDashboard();
+  reconcileCalibrationRecords();
+  setInterval(reconcileCalibrationRecords, CALIBRATION_RECONCILE_INTERVAL_MS);
   els.dateInput.value = toDateInputValue(new Date());
   els.loadBtn.addEventListener("click", loadSlate);
   els.compareBtn.addEventListener("click", compareSelectedGame);
@@ -765,6 +774,7 @@ async function compareSelectedGame() {
     projection.h2h = h2hData;
 
     state.activeProjection = projection;
+    saveCalibrationPrediction(projection);
 
     if (lineupSource !== "Ninguno") {
       const prevStatus = state.lineupStatusMap.get(game.gamePk);
@@ -787,6 +797,7 @@ async function compareSelectedGame() {
     renderLineups(projection);
     renderBullpens(projection);
     renderH2H(projection);
+    renderCalibrationDashboard();
     renderTeamStats(projection);
     renderResults(projection);
     renderPredictor(projection);
@@ -4339,6 +4350,139 @@ async function fetchH2hGames(awayTeamId, homeTeamId, referenceDate) {
     console.warn("Error consultando historial H2H:", err);
     return null;
   }
+}
+
+function loadCalibrationRecords() {
+  try {
+    const records = JSON.parse(localStorage.getItem(CALIBRATION_STORAGE_KEY) || "[]");
+    return Array.isArray(records) ? records.filter((record) => record && record.gamePk) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistCalibrationRecords() {
+  try {
+    localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(state.calibrationRecords.slice(-MAX_CALIBRATION_RECORDS)));
+  } catch (error) {
+    console.warn("No se pudo guardar el historial de calibración:", error);
+  }
+}
+
+function isCompletedGame(game = {}) {
+  const status = String(game.status?.abstractGameState || game.status?.detailedState || "").toLowerCase();
+  return status.includes("final") || status.includes("completed");
+}
+
+function saveCalibrationPrediction(projection) {
+  const game = projection?.game;
+  if (!game?.gamePk || isCompletedGame(game)) return;
+
+  const favoriteSide = projection.favorite === projection.homeName ? "home" : "away";
+  const record = {
+    gamePk: game.gamePk,
+    date: game.officialDate || (game.gameDate ? game.gameDate.slice(0, 10) : ""),
+    createdAt: new Date().toISOString(),
+    awayName: game.teams.away.team.name,
+    homeName: game.teams.home.team.name,
+    favoriteSide,
+    favoriteProbability: round1(projection.winProbability * 100) / 100,
+    projectedAwayRuns: projection.awayRuns,
+    projectedHomeRuns: projection.homeRuns,
+    projectedTotalRuns: projection.totalRuns,
+    marketTotalLine: Number.isFinite(projection.odds?.overUnder) ? projection.odds.overUnder : null,
+    totalLean: projection.totalLean || "",
+    confidence: projection.confidence || "Baja",
+    completed: false,
+  };
+
+  const existingIndex = state.calibrationRecords.findIndex((item) => item.gamePk === record.gamePk);
+  if (existingIndex >= 0 && !state.calibrationRecords[existingIndex].completed) {
+    state.calibrationRecords[existingIndex] = record;
+  } else if (existingIndex < 0) {
+    state.calibrationRecords.push(record);
+  }
+  persistCalibrationRecords();
+}
+
+async function reconcileCalibrationRecords() {
+  const today = toDateInputValue(new Date());
+  const pending = state.calibrationRecords.filter((record) => !record.completed && record.date && record.date <= today);
+  if (!pending.length) return;
+
+  const results = await Promise.allSettled(pending.map(async (record) => {
+    const data = await fetchJson(`${MLB_BASE}/game/${record.gamePk}/feed/live`);
+    const status = String(data?.gameData?.status?.abstractGameState || data?.gameData?.status?.detailedState || "").toLowerCase();
+    if (!status.includes("final") && !status.includes("completed")) return null;
+    const linescore = data?.liveData?.linescore?.teams || {};
+    const awayRuns = Number.parseFloat(linescore?.away?.runs);
+    const homeRuns = Number.parseFloat(linescore?.home?.runs);
+    if (!Number.isFinite(awayRuns) || !Number.isFinite(homeRuns)) return null;
+    return { gamePk: record.gamePk, awayRuns, homeRuns };
+  }));
+
+  let changed = false;
+  results.forEach((result) => {
+    if (result.status !== "fulfilled" || !result.value) return;
+    const index = state.calibrationRecords.findIndex((record) => record.gamePk === result.value.gamePk);
+    if (index < 0) return;
+    const record = state.calibrationRecords[index];
+    const { awayRuns, homeRuns } = result.value;
+    state.calibrationRecords[index] = {
+      ...record,
+      completed: true,
+      completedAt: new Date().toISOString(),
+      actualAwayRuns: awayRuns,
+      actualHomeRuns: homeRuns,
+      actualTotalRuns: awayRuns + homeRuns,
+      favoriteWon: record.favoriteSide === "home" ? homeRuns > awayRuns : awayRuns > homeRuns,
+    };
+    changed = true;
+  });
+
+  if (changed) persistCalibrationRecords();
+  renderCalibrationDashboard();
+}
+
+function renderCalibrationDashboard() {
+  if (!els.calibrationSection) return;
+  const completed = state.calibrationRecords.filter((record) => record.completed && Number.isFinite(record.actualTotalRuns));
+  const pending = state.calibrationRecords.filter((record) => !record.completed).length;
+  const evaluated = completed.length;
+  const winnerAccuracy = evaluated ? completed.filter((record) => record.favoriteWon).length / evaluated : null;
+  const totalMae = evaluated
+    ? completed.reduce((sum, record) => sum + Math.abs(record.projectedTotalRuns - record.actualTotalRuns), 0) / evaluated
+    : null;
+
+  const bins = [
+    { label: "50–54%", min: 0.50, max: 0.55 },
+    { label: "55–59%", min: 0.55, max: 0.60 },
+    { label: "60–64%", min: 0.60, max: 0.65 },
+    { label: "65–69%", min: 0.65, max: 0.70 },
+    { label: "70%+", min: 0.70, max: 1.01 },
+  ];
+  const binsHtml = bins.map((bin) => {
+    const sample = completed.filter((record) => record.favoriteProbability >= bin.min && record.favoriteProbability < bin.max);
+    const actual = sample.length ? sample.filter((record) => record.favoriteWon).length / sample.length : null;
+    const projected = sample.length ? sample.reduce((sum, record) => sum + record.favoriteProbability, 0) / sample.length : null;
+    const delta = actual !== null ? actual - projected : null;
+    const tone = delta === null || Math.abs(delta) <= 0.05 ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400";
+    return `<tr class="border-t border-slate-100 dark:border-slate-800"><td class="px-3 py-2 font-semibold">${bin.label}</td><td class="px-3 py-2 text-center">${sample.length}</td><td class="px-3 py-2 text-center">${projected === null ? "—" : `${Math.round(projected * 100)}%`}</td><td class="px-3 py-2 text-center">${actual === null ? "—" : `${Math.round(actual * 100)}%`}</td><td class="px-3 py-2 text-center font-bold ${tone}">${delta === null ? "—" : `${delta > 0 ? "+" : ""}${Math.round(delta * 100)} pp`}</td></tr>`;
+  }).join("");
+
+  els.calibrationSection.innerHTML = `
+    <section class="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-4 sm:p-5 shadow-panel dark:shadow-panel-dark">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div><h3 class="text-sm font-bold uppercase tracking-wide text-slate-800 dark:text-slate-200">Rendimiento y calibración del modelo</h3><p class="text-xs text-slate-500 dark:text-slate-400">Historial local de pronósticos guardados antes del partido.</p></div>
+        <span class="rounded-full bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 px-2.5 py-1 text-xs font-bold text-sky-700 dark:text-sky-300">${pending} pendiente${pending === 1 ? "" : "s"}</span>
+      </div>
+      <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="rounded-lg bg-slate-50 dark:bg-slate-950/50 p-3"><span class="block text-[11px] font-bold uppercase text-slate-500">Partidos evaluados</span><strong class="text-xl text-slate-900 dark:text-white">${evaluated}</strong></div>
+        <div class="rounded-lg bg-slate-50 dark:bg-slate-950/50 p-3"><span class="block text-[11px] font-bold uppercase text-slate-500">Acierto ganador</span><strong class="text-xl text-slate-900 dark:text-white">${winnerAccuracy === null ? "—" : `${(winnerAccuracy * 100).toFixed(1)}%`}</strong></div>
+        <div class="rounded-lg bg-slate-50 dark:bg-slate-950/50 p-3"><span class="block text-[11px] font-bold uppercase text-slate-500">Error medio total carreras</span><strong class="text-xl text-slate-900 dark:text-white">${totalMae === null ? "—" : totalMae.toFixed(2)}</strong></div>
+      </div>
+      <div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800"><table class="w-full text-xs text-slate-700 dark:text-slate-300"><thead class="bg-slate-50 dark:bg-slate-950 text-[10px] uppercase text-slate-500"><tr><th class="px-3 py-2 text-left">Probabilidad</th><th class="px-3 py-2">Muestra</th><th class="px-3 py-2">Proyectada</th><th class="px-3 py-2">Real</th><th class="px-3 py-2">Desvío</th></tr></thead><tbody>${binsHtml}</tbody></table></div>
+    </section>`;
 }
 
 function formatDateReadable(dateStr) {

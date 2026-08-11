@@ -5825,11 +5825,10 @@ function buildExplanation(model) {
     .map((metric) => side === "home" ? metric.homeText : metric.awayText);
   const favoriteAdvantages = advantagesFor(favoriteSide);
   const rivalAdvantages = advantagesFor(favoriteSide === "home" ? "away" : "home");
-  const scoreContext = `${favoriteName} proyecta ${favoriteSide === "home" ? model.homeRuns.toFixed(1) : model.awayRuns.toFixed(1)} carreras frente a ${(favoriteSide === "home" ? model.awayRuns : model.homeRuns).toFixed(1)} de ${rivalName}`;
   const summaryParts = [`${favoriteName} es favorito ${edgeLabel} (${Math.round(model.winProbability * 100)}%).`];
-  if (rivalAdvantages.length) summaryParts.push(`${rivalName} tiene ventaja en ${rivalAdvantages.join(" y ")}, pero ${scoreContext}.`);
-  else summaryParts.push(`${scoreContext}.`);
-  if (favoriteAdvantages.length) summaryParts.push(`${favoriteName} también compensa con ${favoriteAdvantages.join(" y ")}.`);
+  if (favoriteAdvantages.length) summaryParts.push(`El modelo le da ventaja en ${favoriteAdvantages.join(" y ")}.`);
+  if (rivalAdvantages.length) summaryParts.push(`${rivalName} conserva ventaja en ${rivalAdvantages.join(" y ")}.`);
+  if (!favoriteAdvantages.length && !rivalAdvantages.length) summaryParts.push("La diferencia surge de la combinación ponderada de abridor, ofensiva, forma, bullpen y localía.");
   const factors = [
     `${model.awayName} ${scorePercent(model.awayPitcherMetrics.score)} vs ${model.homeName} ${scorePercent(model.homePitcherMetrics.score)} en abridores`,
     `Ofensiva: ${model.awayName} ${scorePercent(model.awayOffense.score)}, ${model.homeName} ${scorePercent(model.homeOffense.score)}`,

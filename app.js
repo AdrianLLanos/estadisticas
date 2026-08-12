@@ -234,7 +234,7 @@ function setStadiumBackground(venueName) {
 const LINEUP_POLL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos
 const CALIBRATION_STORAGE_KEY = "mlb-calibration-records-v1";
 const MAX_CALIBRATION_RECORDS = 6000;
-const CALIBRATION_RECONCILE_INTERVAL_MS = 30 * 60 * 1000;
+const CALIBRATION_RECONCILE_INTERVAL_MS = 60 * 1000;
 
 const state = {
   games: [],
@@ -248,6 +248,7 @@ const state = {
   lineupStatusMap: new Map(),
   lineupPollTimer: null,
   isPollingLineups: false,
+  isGeneratingCalibration: false,
   calibrationRecords: [],
 };
 
@@ -620,7 +621,9 @@ async function loadSlate() {
 
       return matchesTargetDate && isNotPostponed;
     });
+    reconcileCalibrationFromSchedule(state.games);
     state.espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
+    void saveCalibrationPredictionsForSlate(state.games);
     state.selectedGamePk = state.games[0]?.gamePk || null;
 
     renderGames();
@@ -4403,12 +4406,96 @@ function saveCalibrationPrediction(projection) {
   };
 
   const existingIndex = state.calibrationRecords.findIndex((item) => item.gamePk === record.gamePk);
-  if (existingIndex >= 0 && !state.calibrationRecords[existingIndex].completed) {
-    state.calibrationRecords[existingIndex] = record;
-  } else if (existingIndex < 0) {
-    state.calibrationRecords.push(record);
-  }
+  if (existingIndex >= 0) return;
+  state.calibrationRecords.push(record);
   persistCalibrationRecords();
+}
+
+function isFutureGame(game = {}) {
+  const startTime = new Date(game.gameDate || 0).getTime();
+  return Number.isFinite(startTime) && startTime > Date.now() && !isCompletedGame(game);
+}
+
+async function createCalibrationProjection(game) {
+  const away = game.teams.away.team;
+  const home = game.teams.home.team;
+  const espnEvent = findEspnEvent(game);
+  const espnPitchers = extractEspnPitchers(espnEvent);
+  const season = String(game.season || new Date(game.gameDate).getFullYear());
+  const referenceDate = game.officialDate || toDateInputValue(new Date(game.gameDate));
+  const [awayStats, homeStats, awayMlbPitcher, homeMlbPitcher, awayRecent, homeRecent, awaySplits, homeSplits, weather] = await Promise.all([
+    getTeamStats(away.id),
+    getTeamStats(home.id),
+    getPitcherStats(game.teams.away.probablePitcher?.id, season),
+    getPitcherStats(game.teams.home.probablePitcher?.id, season),
+    getTeamRecentContext(away.id, referenceDate, game.teams.away.probablePitcher?.id, season),
+    getTeamRecentContext(home.id, referenceDate, game.teams.home.probablePitcher?.id, season),
+    getTeamHomeAwaySplits(away.id, season),
+    getTeamHomeAwaySplits(home.id, season),
+    fetchOpenMeteoWeather(game.venue?.name, game.gameDate),
+  ]);
+
+  return buildProjection({
+    game,
+    awayStats,
+    homeStats,
+    awayPitcher: mergePitcherSources(espnPitchers.away, awayMlbPitcher, game.teams.away.probablePitcher),
+    homePitcher: mergePitcherSources(espnPitchers.home, homeMlbPitcher, game.teams.home.probablePitcher),
+    awayRecent,
+    homeRecent,
+    awaySplits,
+    homeSplits,
+    espnEvent,
+    weather,
+  });
+}
+
+async function saveCalibrationPredictionsForSlate(games = []) {
+  if (state.isGeneratingCalibration) return;
+  const pendingGames = games.filter((game) => isFutureGame(game) && !state.calibrationRecords.some((record) => record.gamePk === game.gamePk));
+  if (!pendingGames.length) return;
+
+  state.isGeneratingCalibration = true;
+  try {
+    const projections = await Promise.allSettled(pendingGames.map(createCalibrationProjection));
+    projections.forEach((result) => {
+      if (result.status === "fulfilled") saveCalibrationPrediction(result.value);
+      else console.warn("No se pudo guardar el pronóstico automático de calibración:", result.reason);
+    });
+    renderCalibrationDashboard();
+  } finally {
+    state.isGeneratingCalibration = false;
+  }
+}
+
+function completeCalibrationRecord(gamePk, awayRuns, homeRuns) {
+  if (!Number.isFinite(awayRuns) || !Number.isFinite(homeRuns)) return false;
+  const index = state.calibrationRecords.findIndex((record) => record.gamePk === gamePk && !record.completed);
+  if (index < 0) return false;
+
+  const record = state.calibrationRecords[index];
+  state.calibrationRecords[index] = {
+    ...record,
+    completed: true,
+    completedAt: new Date().toISOString(),
+    actualAwayRuns: awayRuns,
+    actualHomeRuns: homeRuns,
+    actualTotalRuns: awayRuns + homeRuns,
+    favoriteWon: record.favoriteSide === "home" ? homeRuns > awayRuns : awayRuns > homeRuns,
+  };
+  return true;
+}
+
+function reconcileCalibrationFromSchedule(games = []) {
+  let changed = false;
+  games.forEach((game) => {
+    if (!isCompletedGame(game)) return;
+    const awayRuns = Number.parseFloat(game.teams?.away?.score);
+    const homeRuns = Number.parseFloat(game.teams?.home?.score);
+    changed = completeCalibrationRecord(game.gamePk, awayRuns, homeRuns) || changed;
+  });
+  if (changed) persistCalibrationRecords();
+  return changed;
 }
 
 async function reconcileCalibrationRecords() {
@@ -4430,20 +4517,8 @@ async function reconcileCalibrationRecords() {
   let changed = false;
   results.forEach((result) => {
     if (result.status !== "fulfilled" || !result.value) return;
-    const index = state.calibrationRecords.findIndex((record) => record.gamePk === result.value.gamePk);
-    if (index < 0) return;
-    const record = state.calibrationRecords[index];
     const { awayRuns, homeRuns } = result.value;
-    state.calibrationRecords[index] = {
-      ...record,
-      completed: true,
-      completedAt: new Date().toISOString(),
-      actualAwayRuns: awayRuns,
-      actualHomeRuns: homeRuns,
-      actualTotalRuns: awayRuns + homeRuns,
-      favoriteWon: record.favoriteSide === "home" ? homeRuns > awayRuns : awayRuns > homeRuns,
-    };
-    changed = true;
+    changed = completeCalibrationRecord(result.value.gamePk, awayRuns, homeRuns) || changed;
   });
 
   if (changed) persistCalibrationRecords();

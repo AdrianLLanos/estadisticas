@@ -232,6 +232,9 @@ function setStadiumBackground(venueName) {
 }
 
 const LINEUP_POLL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos
+const ODDS_POLL_INTERVAL_MS = 90 * 1000;
+const ODDS_HISTORY_STORAGE_KEY = "mlb-espn-odds-history-v1";
+const MAX_ODDS_HISTORY_PER_GAME = 40;
 const CALIBRATION_STORAGE_KEY = "mlb-calibration-records-v1";
 const MAX_CALIBRATION_RECORDS = 6000;
 const CALIBRATION_RECONCILE_INTERVAL_MS = 60 * 1000;
@@ -248,6 +251,11 @@ const state = {
   lineupStatusMap: new Map(),
   lineupPollTimer: null,
   isPollingLineups: false,
+  oddsPollTimer: null,
+  isPollingOdds: false,
+  oddsHistory: new Map(),
+  espnOddsByEvent: new Map(),
+  oddsLastUpdatedAt: null,
   isGeneratingCalibration: false,
   calibrationRecords: [],
 };
@@ -282,9 +290,12 @@ const els = {
   bestBetsSection: document.querySelector("#bestBetsSection"),
   h2hSection: document.querySelector("#h2hSection"),
   calibrationSection: document.querySelector("#calibrationSection"),
+  oddsMarketContent: document.querySelector("#oddsMarketContent"),
+  oddsRefreshBadge: document.querySelector("#oddsRefreshBadge"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.oddsHistory = loadOddsHistory();
   state.calibrationRecords = loadCalibrationRecords();
   renderCalibrationDashboard();
   reconcileCalibrationRecords();
@@ -623,15 +634,20 @@ async function loadSlate() {
     });
     reconcileCalibrationFromSchedule(state.games);
     state.espnEvents = espnResult.status === "fulfilled" ? espnResult.value?.events || [] : [];
+    state.oddsLastUpdatedAt = state.espnEvents.length ? Date.now() : null;
+    captureOddsSnapshots();
+    void hydrateEspnOdds(state.espnEvents);
     void saveCalibrationPredictionsForSlate(state.games);
     state.selectedGamePk = state.games[0]?.gamePk || null;
 
     renderGames();
     renderMatchupHeader(getSelectedGame());
+    renderOddsMarket(getSelectedGame());
     els.compareBtn.disabled = !state.selectedGamePk;
 
     if (!state.games.length) {
       stopLineupPolling();
+      stopOddsPolling();
       updateLineupAutoBadge("ok");
       setStatus("No hay partidos MLB para la fecha seleccionada.", "warn");
       return;
@@ -640,13 +656,16 @@ async function loadSlate() {
     const espnNote = state.espnEvents.length ? "ESPN conectado" : "ESPN sin respuesta";
     setStatus(`${state.games.length} partidos cargados. ${espnNote}.`, "ok");
     startLineupPolling();
+    startOddsPolling();
   } catch (error) {
     stopLineupPolling();
+    stopOddsPolling();
     state.games = [];
     state.espnEvents = [];
     state.selectedGamePk = null;
     renderGames();
     renderMatchupHeader(null);
+    renderOddsMarket(null);
     els.compareBtn.disabled = true;
     setStatus(error.message || "No se pudo cargar la jornada.", "error");
   } finally {
@@ -3014,6 +3033,7 @@ function renderGames() {
       state.selectedGamePk = Number(button.dataset.gamePk);
       renderGames();
       renderMatchupHeader(getSelectedGame());
+      renderOddsMarket(getSelectedGame());
       clearResults(false);
       els.compareBtn.disabled = false;
       if (window.lucide) window.lucide.createIcons();
@@ -4361,6 +4381,113 @@ async function fetchH2hGames(awayTeamId, homeTeamId, referenceDate) {
   }
 }
 
+function stopOddsPolling() {
+  if (state.oddsPollTimer) {
+    clearInterval(state.oddsPollTimer);
+    state.oddsPollTimer = null;
+  }
+}
+
+function startOddsPolling() {
+  stopOddsPolling();
+  pollEspnOdds();
+  state.oddsPollTimer = setInterval(pollEspnOdds, ODDS_POLL_INTERVAL_MS);
+}
+
+async function pollEspnOdds() {
+  if (state.isPollingOdds || !state.games.length) return;
+  state.isPollingOdds = true;
+  updateOddsRefreshBadge("refreshing");
+
+  try {
+    const date = els.dateInput.value || toDateInputValue(new Date());
+    const data = await fetchJson(`${ESPN_SCOREBOARD}?dates=${date.replaceAll("-", "")}`);
+    if (Array.isArray(data?.events)) {
+      state.espnEvents = data.events;
+      state.oddsLastUpdatedAt = Date.now();
+      captureOddsSnapshots();
+      await hydrateEspnOdds(state.espnEvents);
+      renderGames();
+      renderMatchupHeader(getSelectedGame());
+      renderOddsMarket(getSelectedGame());
+    }
+  } catch (error) {
+    console.warn("No se pudieron actualizar las cuotas de ESPN:", error);
+    updateOddsRefreshBadge("error");
+  } finally {
+    state.isPollingOdds = false;
+  }
+}
+
+function loadOddsHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ODDS_HISTORY_STORAGE_KEY) || "{}");
+    return new Map(Object.entries(raw).filter(([, snapshots]) => Array.isArray(snapshots)));
+  } catch {
+    return new Map();
+  }
+}
+
+function persistOddsHistory() {
+  try {
+    localStorage.setItem(ODDS_HISTORY_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.oddsHistory)));
+  } catch (error) {
+    console.warn("No se pudo guardar el historial local de cuotas:", error);
+  }
+}
+
+function captureOddsSnapshots() {
+  let changed = false;
+  state.games.forEach((game) => {
+    const event = findEspnEvent(game);
+    const odds = extractEspnOdds(event);
+    if (!event?.id || !hasEspnMarketData(odds)) return;
+
+    const snapshot = { timestamp: Date.now(), ...odds };
+    const history = state.oddsHistory.get(String(event.id)) || [];
+    const previous = history.at(-1);
+    const marketChanged = !previous || ["awayMoneyline", "homeMoneyline", "awayOpen", "homeOpen", "overUnder", "overOdds", "underOdds", "awayRunLine", "homeRunLine"].some((key) => previous[key] !== snapshot[key]);
+    if (!marketChanged) return;
+
+    history.push(snapshot);
+    state.oddsHistory.set(String(event.id), history.slice(-MAX_ODDS_HISTORY_PER_GAME));
+    changed = true;
+  });
+  if (changed) persistOddsHistory();
+}
+
+async function hydrateEspnOdds(events = []) {
+  const requests = events.map(async (event) => {
+    const competition = event.competitions?.[0];
+    const scoreboardOdds = competition?.odds?.[0];
+    const url = scoreboardOdds?.$ref || (competition?.id
+      ? `https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb/events/${event.id}/competitions/${competition.id}/odds?lang=en&region=us`
+      : "");
+    if (!url) return;
+
+    try {
+      const response = await fetchJson(url);
+      const items = Array.isArray(response?.items) ? response.items : [];
+      let detailedOdds = items.find((item) => /draftkings/i.test(item?.provider?.name || "")) || items[0] || response;
+      if (detailedOdds?.$ref && !detailedOdds?.provider) {
+        detailedOdds = await fetchJson(String(detailedOdds.$ref).replace(/^http:/, "https:"));
+      }
+      if (detailedOdds && typeof detailedOdds === "object") {
+        state.espnOddsByEvent.set(String(event.id), detailedOdds);
+      }
+    } catch (error) {
+      // The scoreboard payload remains the safe fallback when a provider detail is unavailable.
+      console.warn(`No se pudo obtener el detalle de odds ESPN para ${event.id}:`, error);
+    }
+  });
+
+  await Promise.allSettled(requests);
+  captureOddsSnapshots();
+  renderGames();
+  renderMatchupHeader(getSelectedGame());
+  renderOddsMarket(getSelectedGame());
+}
+
 function loadCalibrationRecords() {
   try {
     const records = JSON.parse(localStorage.getItem(CALIBRATION_STORAGE_KEY) || "[]");
@@ -5418,12 +5545,169 @@ function findEspnEvent(game, espnEventsList = state.espnEvents) {
 
 
 function extractEspnOdds(event) {
-  const odds = event?.competitions?.[0]?.odds?.[0] || {};
+  const odds = state.espnOddsByEvent.get(String(event?.id)) || event?.competitions?.[0]?.odds?.[0] || {};
+  const away = odds.awayTeamOdds || {};
+  const home = odds.homeTeamOdds || {};
+  const rawSpread = number(odds.spread) || null;
+  const awayRunLine = number(away.spread ?? away.runLine ?? odds.awaySpread) || null;
+  const homeRunLine = number(home.spread ?? home.runLine ?? odds.homeSpread) || null;
   return {
     overUnder: number(odds.overUnder) || null,
     details: odds.details || "",
     spread: number(odds.spread) || null,
+    provider: odds.provider?.name || "ESPN",
+    awayMoneyline: extractAmericanPrice(away.moneyLine, away.moneyline, away.current?.moneyLine, away.current?.moneyline, odds.awayMoneyLine, odds.awayMoneyline),
+    homeMoneyline: extractAmericanPrice(home.moneyLine, home.moneyline, home.current?.moneyLine, home.current?.moneyline, odds.homeMoneyLine, odds.homeMoneyline),
+    awayOpen: extractAmericanPrice(away.openMoneyLine, away.open?.moneyLine, away.open?.moneyline, away.opening?.moneyLine, away.opening?.moneyline, away.open, odds.awayOpen),
+    homeOpen: extractAmericanPrice(home.openMoneyLine, home.open?.moneyLine, home.open?.moneyline, home.opening?.moneyLine, home.opening?.moneyline, home.open, odds.homeOpen),
+    awayRunLine: Number.isFinite(awayRunLine) ? awayRunLine : (Number.isFinite(rawSpread) && away.favorite ? -Math.abs(rawSpread) : (Number.isFinite(rawSpread) && home.favorite ? Math.abs(rawSpread) : null)),
+    homeRunLine: Number.isFinite(homeRunLine) ? homeRunLine : (Number.isFinite(rawSpread) && home.favorite ? -Math.abs(rawSpread) : (Number.isFinite(rawSpread) && away.favorite ? Math.abs(rawSpread) : null)),
+    awaySpreadOdds: number(away.spreadOdds) || null,
+    homeSpreadOdds: number(home.spreadOdds) || null,
+    overOdds: number(odds.overOdds ?? odds.overOddsValue) || null,
+    underOdds: number(odds.underOdds ?? odds.underOddsValue) || null,
+    awayFavorite: Boolean(away.favorite),
+    homeFavorite: Boolean(home.favorite),
   };
+}
+
+function extractAmericanPrice(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const raw = typeof value === "object"
+      ? (value.american ?? value.value ?? value.displayValue ?? value.alternateDisplayValue)
+      : value;
+    const parsed = Number.parseFloat(raw);
+    if (Number.isFinite(parsed) && parsed !== 0) return parsed;
+  }
+  return null;
+}
+
+function hasEspnMarketData(odds) {
+  return [odds?.awayMoneyline, odds?.homeMoneyline, odds?.overUnder, odds?.awayRunLine, odds?.homeRunLine].some((value) => Number.isFinite(value));
+}
+
+function formatAmericanOdds(value) {
+  if (!Number.isFinite(value)) return "—";
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function formatRunLine(line, price) {
+  if (!Number.isFinite(line)) return "—";
+  const prefix = line > 0 ? "+" : "";
+  return `${prefix}${line}${Number.isFinite(price) ? ` (${formatAmericanOdds(price)})` : ""}`;
+}
+
+function getEspnFavorite(odds, awayName, homeName) {
+  if (Number.isFinite(odds.awayMoneyline) && Number.isFinite(odds.homeMoneyline)) {
+    return odds.awayMoneyline < odds.homeMoneyline
+      ? { side: "away", name: awayName, price: odds.awayMoneyline }
+      : { side: "home", name: homeName, price: odds.homeMoneyline };
+  }
+  if (odds.awayFavorite) return { side: "away", name: awayName, price: odds.awayMoneyline };
+  if (odds.homeFavorite) return { side: "home", name: homeName, price: odds.homeMoneyline };
+  return null;
+}
+
+function getOddsMovement(eventId, odds, favorite) {
+  const history = state.oddsHistory.get(String(eventId)) || [];
+  const prior = history.length > 1 ? history.at(-2) : null;
+  if (!prior || !favorite) return { label: "Sin movimiento previo", tone: "neutral", icon: "minus" };
+
+  const key = favorite.side === "away" ? "awayMoneyline" : "homeMoneyline";
+  const current = odds[key];
+  const previous = prior[key];
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || current === previous) {
+    return { label: "Sin cambio desde la última lectura", tone: "neutral", icon: "minus" };
+  }
+  // A lower American price (e.g. -115 to -130) means the market is backing that side.
+  return current < previous
+    ? { label: `La línea se mueve hacia ${favorite.name}`, tone: "up", icon: "trending-down" }
+    : { label: `La línea se aleja de ${favorite.name}`, tone: "down", icon: "trending-up" };
+}
+
+function getTotalDirection(odds) {
+  if (Number.isFinite(odds.overOdds) && Number.isFinite(odds.underOdds)) {
+    return odds.overOdds < odds.underOdds ? "Over" : odds.underOdds < odds.overOdds ? "Under" : null;
+  }
+  return null;
+}
+
+function updateOddsRefreshBadge(status = "ready") {
+  if (!els.oddsRefreshBadge) return;
+  if (status === "refreshing") {
+    els.oddsRefreshBadge.innerHTML = `<span class="relative flex h-1.5 w-1.5"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span><span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-sky-500"></span></span> Refreshing`;
+    return;
+  }
+  if (status === "error") {
+    els.oddsRefreshBadge.innerHTML = `<span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span> ESPN unavailable`;
+    return;
+  }
+  if (!state.oddsLastUpdatedAt) {
+    els.oddsRefreshBadge.textContent = "Awaiting ESPN odds";
+    return;
+  }
+  els.oddsRefreshBadge.innerHTML = `<span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Updated ${new Date(state.oddsLastUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function renderOddsMarket(game) {
+  if (!els.oddsMarketContent) return;
+  if (!game) {
+    els.oddsMarketContent.textContent = "Select a game to view ESPN market prices.";
+    updateOddsRefreshBadge();
+    return;
+  }
+
+  const event = findEspnEvent(game);
+  const odds = extractEspnOdds(event);
+  const awayName = game.teams.away.team.name;
+  const homeName = game.teams.home.team.name;
+  if (!event || !hasEspnMarketData(odds)) {
+    els.oddsMarketContent.innerHTML = `<div class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">ESPN has not published market odds for this game.</div>`;
+    updateOddsRefreshBadge();
+    return;
+  }
+
+  const favorite = getEspnFavorite(odds, awayName, homeName);
+  const movement = getOddsMovement(event.id, odds, favorite);
+  const favoriteRunLine = favorite
+    ? (favorite.side === "away" ? odds.awayRunLine : odds.homeRunLine)
+    : null;
+  const favoriteRunLinePrice = favorite
+    ? (favorite.side === "away" ? odds.awaySpreadOdds : odds.homeSpreadOdds)
+    : null;
+  const totalDirection = getTotalDirection(odds);
+  const tone = movement.tone === "up"
+    ? "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800/60"
+    : movement.tone === "down"
+      ? "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/35 border-amber-200 dark:border-amber-800/60"
+      : "text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700";
+  const marketCell = (label, awayValue, homeValue) => `
+    <div class="rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/30">
+      <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">${label}</p>
+      <div class="mt-2 space-y-1.5 text-xs font-bold">
+        <div class="flex items-center justify-between gap-2" title="${escapeHtml(awayName)}"><span class="min-w-0 truncate text-slate-600 dark:text-slate-300">${escapeHtml(awayName)}</span><b class="shrink-0 text-sm text-sky-700 dark:text-sky-300">${awayValue}</b></div>
+        <div class="flex items-center justify-between gap-2" title="${escapeHtml(homeName)}"><span class="min-w-0 truncate text-slate-600 dark:text-slate-300">${escapeHtml(homeName)}</span><b class="shrink-0 text-sm text-sky-700 dark:text-sky-300">${homeValue}</b></div>
+      </div>
+    </div>`;
+
+  els.oddsMarketContent.innerHTML = `
+    <div class="grid gap-3 md:grid-cols-2">
+      ${marketCell("Open ML", formatAmericanOdds(odds.awayOpen), formatAmericanOdds(odds.homeOpen))}
+      ${marketCell("Moneyline", formatAmericanOdds(odds.awayMoneyline), formatAmericanOdds(odds.homeMoneyline))}
+      ${marketCell("Total", `Over ${odds.overUnder ?? "—"}${Number.isFinite(odds.overOdds) ? ` (${formatAmericanOdds(odds.overOdds)})` : ""}`, `Under ${odds.overUnder ?? "—"}${Number.isFinite(odds.underOdds) ? ` (${formatAmericanOdds(odds.underOdds)})` : ""}`)}
+      ${marketCell("Run Line", formatRunLine(odds.awayRunLine, odds.awaySpreadOdds), formatRunLine(odds.homeRunLine, odds.homeSpreadOdds))}
+    </div>
+    <div class="mt-3 flex flex-col items-start gap-1.5 rounded-lg border px-3 py-2.5 ${tone}">
+      <span class="inline-flex items-center gap-1.5 text-xs font-bold"><i data-lucide="${movement.icon}" class="h-3.5 w-3.5"></i>${escapeHtml(movement.label)}</span>
+      <span class="text-xs font-semibold">${favorite ? `Favorito del mercado: <strong>${escapeHtml(favorite.name)} (${formatAmericanOdds(favorite.price)})</strong>` : "Mercado sin favorito definido"}</span>
+      ${Number.isFinite(odds.overUnder) ? `<span class="text-xs font-semibold">Total: <strong>${totalDirection ? `${totalDirection} ${odds.overUnder}` : odds.overUnder}</strong></span>` : ""}
+      ${favorite && Number.isFinite(favoriteRunLine) ? `<span class="text-xs font-semibold">Run Line: <strong>${escapeHtml(favorite.name)} ${formatRunLine(favoriteRunLine, favoriteRunLinePrice)}</strong></span>` : ""}
+    </div>
+    <p class="mt-2 text-[10px] font-medium text-slate-500 dark:text-slate-400">Source: ${escapeHtml(odds.provider)} · Auto-refreshes every 90 seconds</p>
+  `;
+  updateOddsRefreshBadge();
+  if (window.lucide) window.lucide.createIcons();
 }
 
 function parseWindDirection(val) {

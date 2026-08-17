@@ -2650,6 +2650,16 @@ function summarizePitcherRecentStarts(splits) {
     inningsPerStart: average(starts.map((split) => inningsToNumber(split.stat?.inningsPitched))),
     runsAllowedPerStart: average(starts.map((split) => number(split.stat?.runs))),
     hitsAllowedPerStart: average(starts.map((split) => number(split.stat?.hits))),
+    era: (() => {
+      const innings = sum(starts.map((split) => inningsToNumber(split.stat?.inningsPitched)));
+      const earnedRuns = sum(starts.map((split) => number(split.stat?.earnedRuns)));
+      return innings > 0 ? (earnedRuns * 9) / innings : null;
+    })(),
+    whip: (() => {
+      const innings = sum(starts.map((split) => inningsToNumber(split.stat?.inningsPitched)));
+      const baserunners = sum(starts.map((split) => number(split.stat?.hits) + number(split.stat?.baseOnBalls)));
+      return innings > 0 ? baserunners / innings : null;
+    })(),
   };
 }
 
@@ -4282,8 +4292,133 @@ function renderPitchers(projection) {
           </tbody>
         </table>
       </div>
+
+      ${renderPitcherFormCard(projection)}
     </section>
   `;
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderPitcherFormCard(projection) {
+  const renderPitcher = (pitcher) => {
+    const recent = pitcher?.recentStarts;
+    const count = Number(recent?.count || 0);
+    if (count < 2 || !Number.isFinite(recent?.era) || !Number.isFinite(recent?.whip)) {
+      return `<div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/30 p-3 text-xs text-slate-500 dark:text-slate-400">Sin muestra reciente suficiente.</div>`;
+    }
+    const seasonEra = Number(pitcher?.era);
+    const delta = recent.era - seasonEra;
+    const trend = delta <= -0.35 ? { label: "En alza", tone: "emerald", icon: "trending-up" } : delta >= 0.35 ? { label: "En descenso", tone: "rose", icon: "trending-down" } : { label: "Estable", tone: "sky", icon: "minus" };
+    return `<div class="rounded-lg border border-${trend.tone}-200 dark:border-${trend.tone}-800 bg-${trend.tone}-50/50 dark:bg-${trend.tone}-950/20 p-3"><div class="flex items-start justify-between gap-2"><p class="truncate text-xs font-black text-slate-800 dark:text-slate-100">${escapeHtml(pitcher?.name || "Abridor N/D")}</p><span class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-black text-${trend.tone}-700 dark:text-${trend.tone}-300"><i data-lucide="${trend.icon}" class="h-3.5 w-3.5"></i>${trend.label}</span></div><p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Últimas ${count} aperturas</p><div class="mt-2 grid grid-cols-3 gap-2 text-center"><div><span class="block text-[10px] text-slate-500">ERA</span><strong class="text-sm text-slate-900 dark:text-white">${recent.era.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">WHIP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.whip.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">IP / AP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.inningsPerStart.toFixed(1)}</strong></div></div><p class="mt-2 text-[11px] text-slate-600 dark:text-slate-400">Temporada: ERA ${Number.isFinite(seasonEra) ? seasonEra.toFixed(2) : "N/D"} · ${recent.runsAllowedPerStart.toFixed(1)} R permitidas / apertura</p></div>`;
+  };
+  return `<div class="border-t border-slate-100 dark:border-slate-800 px-4 py-3"><div class="mb-2 flex items-center gap-2"><i data-lucide="activity" class="h-4 w-4 text-emerald-600"></i><div><p class="text-xs font-black text-slate-800 dark:text-slate-100">Forma reciente de abridores</p><p class="text-[11px] text-slate-500">Comparada con su ERA de temporada</p></div></div><div class="grid gap-3 sm:grid-cols-2">${renderPitcher(projection?.pitchers?.away)}${renderPitcher(projection?.pitchers?.home)}</div></div>`;
+}
+
+function renderPitcherHeadToHeadCard(projection) {
+  const history = projection?.pitcherH2h;
+  const awayName = projection?.pitchers?.away?.name || "Abridor visitante";
+  const homeName = projection?.pitchers?.home?.name || "Abridor local";
+
+  if (!history?.available || history.error) {
+    return `
+      <div class="border-t border-slate-100 dark:border-slate-800 px-4 py-3">
+        <div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-950/30 px-3 py-2.5 text-xs text-slate-600 dark:text-slate-400">
+          ${history?.error ? "No se pudo consultar el historial de abridores en este momento." : "El historial entre abridores se mostrará cuando MLB confirme ambos lanzadores probables."}
+        </div>
+      </div>`;
+  }
+
+  if (!history.games.length) {
+    return `
+      <div class="border-t border-slate-100 dark:border-slate-800 px-4 py-3">
+        <div class="flex items-start gap-2.5 rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50/70 dark:bg-sky-950/25 p-3">
+          <i data-lucide="sparkles" class="mt-0.5 h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400"></i>
+          <div>
+            <p class="text-xs font-black text-slate-800 dark:text-slate-100">Primer enfrentamiento de la temporada</p>
+            <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">${escapeHtml(awayName)} y ${escapeHtml(homeName)} no han sido abridores rivales entre sí esta temporada.</p>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const gamesHtml = history.games.map((game) => {
+    const awayWon = game.awayScore > game.homeScore;
+    const homeWon = game.homeScore > game.awayScore;
+    return `
+      <li class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 dark:border-slate-800 py-2 first:border-t-0 first:pt-0 last:pb-0">
+        <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">${formatDateReadable(game.date)}</span>
+        <span class="text-xs text-slate-700 dark:text-slate-300">
+          <strong class="${awayWon ? "text-emerald-700 dark:text-emerald-400" : ""}">${escapeHtml(game.awayName)} ${game.awayScore}</strong>
+          <span class="mx-1 text-slate-400">vs</span>
+          <strong class="${homeWon ? "text-emerald-700 dark:text-emerald-400" : ""}">${game.homeScore} ${escapeHtml(game.homeName)}</strong>
+        </span>
+      </li>`;
+  }).join("");
+
+  return `
+    <div class="border-t border-slate-100 dark:border-slate-800 px-4 py-3">
+      <div class="rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50/60 dark:bg-violet-950/20 p-3">
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex items-start gap-2.5">
+            <i data-lucide="swords" class="mt-0.5 h-4 w-4 shrink-0 text-violet-600 dark:text-violet-400"></i>
+            <div>
+              <p class="text-xs font-black text-slate-800 dark:text-slate-100">Duelo directo de abridores · ${history.season}</p>
+              <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">${escapeHtml(awayName)} vs ${escapeHtml(homeName)}</p>
+            </div>
+          </div>
+          <span class="shrink-0 rounded-full border border-violet-200 dark:border-violet-700 bg-white/80 dark:bg-slate-900/50 px-2 py-0.5 text-[11px] font-black text-violet-700 dark:text-violet-300">${history.games.length} ${history.games.length === 1 ? "juego" : "juegos"}</span>
+        </div>
+        <ul class="mt-3">${gamesHtml}</ul>
+      </div>
+    </div>`;
+}
+
+function pitcherStartedGame(boxscoreTeam, pitcherId) {
+  const player = boxscoreTeam?.players?.[`ID${pitcherId}`];
+  const starts = Number(player?.stats?.pitching?.gamesStarted);
+  return Number.isFinite(starts) && starts > 0;
+}
+
+async function fetchPitcherHeadToHeadHistory(awayTeamId, homeTeamId, awayPitcherId, homePitcherId, referenceDate, season) {
+  const result = { available: Boolean(awayPitcherId && homePitcherId), season: String(season || ""), games: [] };
+  if (!result.available) return result;
+
+  try {
+    const endDate = referenceDate || toDateInputValue(new Date());
+    const scheduleUrl = `${MLB_BASE}/schedule?sportId=1&teamId=${awayTeamId}&opponentId=${homeTeamId}&season=${encodeURIComponent(season)}&gameTypes=R&hydrate=team,linescore`;
+    const schedule = await fetchJson(scheduleUrl);
+    const games = (schedule?.dates || [])
+      .flatMap((date) => date.games || [])
+      .filter((game) => {
+        const gameDate = game.officialDate || game.gameDate?.slice(0, 10) || "";
+        const isFinal = game.status?.codedGameState === "F" || game.status?.abstractGameState === "Final";
+        return isFinal && gameDate <= endDate;
+      });
+
+    const boxscores = await Promise.allSettled(games.map((game) => fetchJson(`${MLB_BASE}/game/${game.gamePk}/boxscore`)));
+    result.games = games.reduce((matched, game, index) => {
+      const boxscore = boxscores[index]?.status === "fulfilled" ? boxscores[index].value : null;
+      const gameAwayTeamId = game.teams?.away?.team?.id;
+      const awayPitcherTeam = gameAwayTeamId === awayTeamId ? boxscore?.teams?.away : boxscore?.teams?.home;
+      const homePitcherTeam = gameAwayTeamId === homeTeamId ? boxscore?.teams?.away : boxscore?.teams?.home;
+      if (!pitcherStartedGame(awayPitcherTeam, awayPitcherId) || !pitcherStartedGame(homePitcherTeam, homePitcherId)) return matched;
+
+      matched.push({
+        date: game.officialDate || game.gameDate?.slice(0, 10) || "",
+        awayName: game.teams?.away?.team?.name || "Visitante",
+        awayScore: number(game.teams?.away?.score),
+        homeName: game.teams?.home?.team?.name || "Local",
+        homeScore: number(game.teams?.home?.score),
+      });
+      return matched;
+    }, []);
+    result.games.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  } catch (error) {
+    console.warn("Error consultando duelos entre abridores:", error);
+    result.error = true;
+  }
+
+  return result;
 }
 
 async function fetchH2hGames(awayTeamId, homeTeamId, referenceDate) {

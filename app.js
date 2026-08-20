@@ -2632,7 +2632,7 @@ function aggregateBullpenGames(bullpenGames, referenceDate, relieversAvailable) 
 
 function summarizePitcherRecentStarts(splits) {
   const starts = (splits || [])
-    .filter((split) => number(split.stat?.gamesStarted) > 0 || inningsToNumber(split.stat?.inningsPitched) >= 3)
+    .filter((split) => number(split.stat?.gamesStarted) > 0)
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
     .slice(0, 10);
 
@@ -2650,6 +2650,8 @@ function summarizePitcherRecentStarts(splits) {
     inningsPerStart: average(starts.map((split) => inningsToNumber(split.stat?.inningsPitched))),
     runsAllowedPerStart: average(starts.map((split) => number(split.stat?.runs))),
     hitsAllowedPerStart: average(starts.map((split) => number(split.stat?.hits))),
+    strikeouts: sum(starts.map((split) => number(split.stat?.strikeOuts))),
+    strikeoutsPerStart: average(starts.map((split) => number(split.stat?.strikeOuts))),
     era: (() => {
       const innings = sum(starts.map((split) => inningsToNumber(split.stat?.inningsPitched)));
       const earnedRuns = sum(starts.map((split) => number(split.stat?.earnedRuns)));
@@ -2912,6 +2914,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       whip: mlbPitcher?.whip || null,
       innings: mlbPitcher?.innings || null,
       inningsDisplay: mlbPitcher?.inningsDisplay || "",
+      starts: mlbPitcher?.starts || null,
+      games: mlbPitcher?.games || null,
       hits: mlbPitcher?.hits || null,
       runs: mlbPitcher?.runs || null,
       earnedRuns: mlbPitcher?.earnedRuns || null,
@@ -2951,6 +2955,8 @@ function mergePitcherSources(espnPitcher, mlbPitcher, mlbProbable) {
       whip: mlbPitcher?.whip || null,
       innings: mlbPitcher?.innings || null,
       inningsDisplay: mlbPitcher?.inningsDisplay || "",
+      starts: mlbPitcher?.starts || null,
+      games: mlbPitcher?.games || null,
       hits: mlbPitcher?.hits || null,
       runs: mlbPitcher?.runs || null,
       earnedRuns: mlbPitcher?.earnedRuns || null,
@@ -4307,9 +4313,22 @@ function renderPitcherFormCard(projection) {
       return `<div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/30 p-3 text-xs text-slate-500 dark:text-slate-400">Sin muestra reciente suficiente.</div>`;
     }
     const seasonEra = Number(pitcher?.era);
+    const seasonStarts = Number(pitcher?.starts);
+    const seasonStrikeouts = Number(pitcher?.strikeouts);
+    const seasonStrikeoutsPerStart = seasonStarts > 0 && Number.isFinite(seasonStrikeouts)
+      ? seasonStrikeouts / seasonStarts
+      : null;
+    const recentStrikeoutsPerStart = Number(recent?.strikeoutsPerStart);
+    const strikeoutLevel = !Number.isFinite(recentStrikeoutsPerStart) || seasonStrikeoutsPerStart === null
+      ? { label: "Sin referencia de temporada", tone: "slate" }
+      : recentStrikeoutsPerStart >= seasonStrikeoutsPerStart + 0.5
+        ? { label: "Nivel alto", tone: "emerald" }
+        : recentStrikeoutsPerStart <= seasonStrikeoutsPerStart - 0.5
+          ? { label: "Nivel bajo", tone: "rose" }
+          : { label: "Nivel normal", tone: "sky" };
     const delta = recent.era - seasonEra;
     const trend = delta <= -0.35 ? { label: "En alza", tone: "emerald", icon: "trending-up" } : delta >= 0.35 ? { label: "En descenso", tone: "rose", icon: "trending-down" } : { label: "Estable", tone: "sky", icon: "minus" };
-    return `<div class="rounded-lg border border-${trend.tone}-200 dark:border-${trend.tone}-800 bg-${trend.tone}-50/50 dark:bg-${trend.tone}-950/20 p-3"><div class="flex items-start justify-between gap-2"><p class="truncate text-xs font-black text-slate-800 dark:text-slate-100">${escapeHtml(pitcher?.name || "Abridor N/D")}</p><span class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-black text-${trend.tone}-700 dark:text-${trend.tone}-300"><i data-lucide="${trend.icon}" class="h-3.5 w-3.5"></i>${trend.label}</span></div><p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Últimas ${count} aperturas</p><div class="mt-2 grid grid-cols-3 gap-2 text-center"><div><span class="block text-[10px] text-slate-500">ERA</span><strong class="text-sm text-slate-900 dark:text-white">${recent.era.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">WHIP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.whip.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">IP / AP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.inningsPerStart.toFixed(1)}</strong></div></div><p class="mt-2 text-[11px] text-slate-600 dark:text-slate-400">Temporada: ERA ${Number.isFinite(seasonEra) ? seasonEra.toFixed(2) : "N/D"} · ${recent.runsAllowedPerStart.toFixed(1)} R permitidas / apertura</p></div>`;
+    return `<div class="rounded-lg border border-${trend.tone}-200 dark:border-${trend.tone}-800 bg-${trend.tone}-50/50 dark:bg-${trend.tone}-950/20 p-3"><div class="flex items-start justify-between gap-2"><p class="truncate text-xs font-black text-slate-800 dark:text-slate-100">${escapeHtml(pitcher?.name || "Abridor N/D")}</p><span class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-black text-${trend.tone}-700 dark:text-${trend.tone}-300"><i data-lucide="${trend.icon}" class="h-3.5 w-3.5"></i>${trend.label}</span></div><p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Últimas ${count} aperturas</p><div class="mt-2 grid grid-cols-3 gap-2 text-center"><div><span class="block text-[10px] text-slate-500">ERA</span><strong class="text-sm text-slate-900 dark:text-white">${recent.era.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">WHIP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.whip.toFixed(2)}</strong></div><div><span class="block text-[10px] text-slate-500">IP / AP</span><strong class="text-sm text-slate-900 dark:text-white">${recent.inningsPerStart.toFixed(1)}</strong></div></div><p class="mt-2 text-[11px] text-slate-600 dark:text-slate-400">En las últimas ${count} aperturas: ${Number.isFinite(recent.runsAllowedPerStart) ? `${recent.runsAllowedPerStart.toFixed(1)} carreras permitidas por apertura` : "carreras permitidas por apertura N/D"}</p><div class="mt-3 rounded-md border border-${strikeoutLevel.tone}-200 bg-white/70 p-2.5 dark:border-${strikeoutLevel.tone}-800 dark:bg-slate-900/30"><div class="flex items-center justify-between gap-2"><span class="text-[11px] font-black text-slate-700 dark:text-slate-200">Strikeouts — últimas ${count} aperturas</span><span class="text-[11px] font-black text-${strikeoutLevel.tone}-700 dark:text-${strikeoutLevel.tone}-300">${strikeoutLevel.label}</span></div><div class="mt-1 flex items-baseline justify-between gap-2"><span class="text-[11px] text-slate-500 dark:text-slate-400"><strong class="text-sm text-slate-900 dark:text-white">${recent.strikeouts}</strong> strikeouts totales</span><span class="text-[11px] text-slate-500 dark:text-slate-400"><strong class="text-sm text-slate-900 dark:text-white">${recentStrikeoutsPerStart.toFixed(1)}</strong> strikeouts / apertura</span></div></div></div>`;
   };
   return `<div class="border-t border-slate-100 dark:border-slate-800 px-4 py-3"><div class="mb-2 flex items-center gap-2"><i data-lucide="activity" class="h-4 w-4 text-emerald-600"></i><div><p class="text-xs font-black text-slate-800 dark:text-slate-100">Forma reciente de abridores</p><p class="text-[11px] text-slate-500">Comparada con su ERA de temporada</p></div></div><div class="grid gap-3 sm:grid-cols-2">${renderPitcher(projection?.pitchers?.away)}${renderPitcher(projection?.pitchers?.home)}</div></div>`;
 }
